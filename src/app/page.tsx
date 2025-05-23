@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { createContext, ReactNode, useEffect, useState } from "react";
 import {
   type Doc,
   initSatellite,
@@ -8,7 +8,10 @@ import {
   getDoc,
   listDocs,
 } from "@junobuild/core-peer";
+import { signIn, signOut, authSubscribe, User, InternetIdentityProvider } from "@junobuild/core";
 import { nanoid } from "nanoid";
+import { IconII } from "../components/icons/IconII";
+import { useSatelliteReady } from "../app/client-providers";
 
 type Record = {
   hello: string;
@@ -18,23 +21,10 @@ export default function Home() {
   const [record, setRecord] = useState<Doc<Record> | undefined>(undefined);
   const [key, setKey] = useState<string | undefined>(undefined);
   const [records, setRecords] = useState<Doc<Record>[]>([]); // 一覧用
-  const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const init = async () => {
-      try {
-        await initSatellite();
-        setIsReady(true);
-      } catch (err) {
-        console.error("Satellite init failed", err);
-        setError("Satelliteの初期化に失敗しました");
-      }
-    };
+  const isReady = useSatelliteReady();
 
-    init();
-  }, []);
-  
   const insert = async () => {
     try {
       const myId = nanoid();
@@ -91,7 +81,17 @@ export default function Home() {
 
   return (
     <main className="p-4">
-      {!isReady && <p>初期化中...</p>}
+      <div className="mb-4">
+        <button
+          onClick={() => signIn({ provider: new InternetIdentityProvider({ domain: "ic0.app" }) })}
+          className="border p-2 rounded flex items-center gap-2"
+          aria-label="Sign in with Internet Identity"
+          disabled={!isReady}
+        >
+          <span className="w-6 h-6"><IconII /></span>
+          {isReady ? "Internet Identityでログイン" : "初期化中..."}
+        </button>
+      </div>
       {isReady && (
         <>
           <div className="flex gap-2 mb-4">

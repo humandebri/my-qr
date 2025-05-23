@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import { ClientProviders } from "./client-providers";
 
 const jetBrainsMono = JetBrains_Mono({ subsets: ["latin"] });
 
@@ -16,8 +17,8 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${jetBrainsMono.className} bg-white `}>
-        {children}
+      <body className={`${jetBrainsMono.className} bg-white`}>
+        <ClientProviders>{children}</ClientProviders>
       </body>
     </html>
   );

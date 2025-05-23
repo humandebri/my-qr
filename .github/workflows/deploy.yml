@@ -22,7 +22,7 @@ jobs:
       - name: Set up pnpm
         uses: pnpm/action-setup@v2
         with:
-          version: 8  # 使用中のpnpmのバージョンに合わせてください
+          version: 8 # あなたのローカルの pnpm に合わせて
 
       - name: Install dependencies with pnpm
         run: pnpm install
