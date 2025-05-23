@@ -1,12 +1,35 @@
 "use client";
 
 import { ReactNode, useEffect, useState, createContext, useContext } from "react";
-import { initSatellite } from "@junobuild/core";
+import { initSatellite, authSubscribe, type User } from "@junobuild/core";
 // import { AuthProvider } from "../components/context/Auth"; // AuthProviderができたら有効化
 // import { WorkerProvider } from "../components/context/Worker"; // WorkerProviderができたら有効化
 
 export const SatelliteReadyContext = createContext(false);
 export const useSatelliteReady = () => useContext(SatelliteReadyContext);
+
+// AuthContextの作成
+const AuthContext = createContext<{ user: User | null, authLoaded: boolean }>({ user: null, authLoaded: false });
+export const useAuth = () => useContext(AuthContext);
+
+export const AuthProvider = ({ children }: { children: ReactNode }) => {
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoaded, setAuthLoaded] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = authSubscribe((u) => {
+      setUser(u);
+      setAuthLoaded(true); // 初回呼び出しでauthLoadedをtrueに
+    });
+    return () => unsubscribe();
+  }, []);
+
+  return (
+    <AuthContext.Provider value={{ user, authLoaded }}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
 
 export function ClientProviders({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
@@ -27,9 +50,10 @@ export function ClientProviders({ children }: { children: ReactNode }) {
   //   </AuthProvider>
   // ) : null;
 
+  // AuthProviderでラップ
   return (
     <SatelliteReadyContext.Provider value={ready}>
-      {ready ? children : null}
+      {ready ? <AuthProvider>{children}</AuthProvider> : null}
     </SatelliteReadyContext.Provider>
   );
 } 

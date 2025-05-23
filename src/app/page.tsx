@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, ReactNode, useEffect, useState } from "react";
+import { createContext, ReactNode, useEffect, useState, useRef } from "react";
 import {
   type Doc,
   initSatellite,
@@ -11,7 +11,10 @@ import {
 import { signIn, signOut, authSubscribe, User, InternetIdentityProvider } from "@junobuild/core";
 import { nanoid } from "nanoid";
 import { IconII } from "../components/icons/IconII";
-import { useSatelliteReady } from "../app/client-providers";
+import { useSatelliteReady, useAuth } from "../app/client-providers";
+import { useRouter } from "next/navigation";
+import QRCode from "qrcode";
+import { MdOutlineContentCopy } from "react-icons/md";
 
 type Record = {
   hello: string;
@@ -22,112 +25,138 @@ export default function Home() {
   const [key, setKey] = useState<string | undefined>(undefined);
   const [records, setRecords] = useState<Doc<Record>[]>([]); // 一覧用
   const [error, setError] = useState<string | null>(null);
+  const [initError, setInitError] = useState<string | null>(null);
+  const [qrUrl, setQrUrl] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
+  const modalRef = useRef<HTMLDivElement>(null);
 
   const isReady = useSatelliteReady();
+  const { user, authLoaded } = useAuth();
+  const router = useRouter();
 
-  const insert = async () => {
+  // サインインしていなければ/loginへリダイレクト
+  useEffect(() => {
+    if (isReady && authLoaded && !user) {
+      router.push("/login");
+    }
+  }, [isReady, authLoaded, user, router]);
+
+  useEffect(() => {
+    if (user) {
+      const principal = user.owner;
+      const qrData = `icp://principal/${principal}`;
+      QRCode.toDataURL(qrData)
+        .then(setQrUrl)
+        .catch(console.error);
+    }
+  }, [user]);
+
+  // モーダル外クリックで閉じる
+  useEffect(() => {
+    if (!modalOpen) return;
+    const handleClick = (e: MouseEvent) => {
+      if (modalRef.current && !modalRef.current.contains(e.target as Node)) {
+        setModalOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [modalOpen]);
+
+  // isReadyとauthLoadedが両方trueになるまで何も表示しない
+  if (!isReady || !authLoaded) {
+    return null;
+  }
+  if (!user) {
+    return null;
+  }
+
+  const handleSignIn = async () => {
     try {
-      const myId = nanoid();
-      const doc = await setDoc({
-        collection: "demo",
-        doc: {
-          key: myId ,
-          data: {
-            hello: "world",
-          },
-          description: "This is a description"
-        },
+      await signIn({
+        maxTimeToLive: BigInt(400) * BigInt(60) * BigInt(60) * BigInt(1_000_000_000),
+        windowed: false,
+        allowPin: true,
       });
-
-      setRecord(doc);
-      setKey(doc.key);
-      setError(null);
-    } catch (err) {
-      console.error("Insert failed", err);
-      setError("データの保存に失敗しました");
+    } catch (error) {
+      setInitError("ログインに失敗しました。詳細をコンソールで確認してください。");
+      console.error('Login failed:', error);
     }
   };
 
-  const get = async () => {
-    if (!key) return;
+  // ログアウト処理
+  const handleLogout = async () => {
+    await signOut();
+    router.push("/login");
+  };
 
-    try {
-      const result = await getDoc({
-        collection: "demo",
-        key,
-      });
-
-      console.log("Get done", result);
-      setRecord(result as Doc<Record>);
-    } catch (err) {
-      console.error("Get failed", err);
-      setError("ドキュメントの取得に失敗しました");
+  const handleCopy = async () => {
+    if (user?.owner) {
+      await navigator.clipboard.writeText(user.owner);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
     }
   };
 
-  const list = async () => {
-    try {
-      const result = await listDocs<Record>({
-        collection: "demo",
-      });
-
-      setRecords(result.items);
-      console.log("List done", result.items);
-    } catch (err) {
-      console.error("List failed", err);
-      setError("ドキュメントの一覧取得に失敗しました");
-    }
-  };
-
+  // ログイン済みの場合のみUIを表示
   return (
     <main className="p-4">
-      <div className="mb-4">
+      <div className="mb-4 flex justify-end">
         <button
-          onClick={() => signIn({ provider: new InternetIdentityProvider({ domain: "ic0.app" }) })}
-          className="border p-2 rounded flex items-center gap-2"
-          aria-label="Sign in with Internet Identity"
-          disabled={!isReady}
+          onClick={handleLogout}
+          className="border p-2 rounded flex items-center gap-2 bg-red-500  hover:bg-red-600"
+          aria-label="logout"
         >
-          <span className="w-6 h-6"><IconII /></span>
-          {isReady ? "Internet Identityでログイン" : "初期化中..."}
+          logout
         </button>
       </div>
-      {isReady && (
-        <>
-          <div className="flex gap-2 mb-4">
-            <button onClick={insert} className="border p-2 rounded">
-              Insert a document
-            </button>
-            <button onClick={get} className="border p-2 rounded">
-              Get a document
-            </button>
-            <button onClick={list} className="border p-2 rounded">
-              List documents
-            </button>
-          </div>
-
-          {record && (
-            <>
-              <p>Key (last get/inserted): {record.key}</p>
-              <p>Data: {record.data.hello}</p>
-            </>
-          )}
-
-          {records.length > 0 && (
-            <div className="mt-4">
-              <h2 className="font-bold">All documents in "demo":</h2>
-              <ul className="list-disc pl-6">
-                {records.map((doc) => (
-                  <li key={doc.key}>
-                    Key: {doc.key} | Data: {doc.data.hello}
-                  </li>
-                ))}
-              </ul>
+      <div className="mb-4">
+        {/* プリンシパルアドレス表示とコピー・QRコード */}
+        {user && (
+          <div className="flex flex-col gap-2 items-start">
+            <p className="px-2 ">Principal</p>
+            <div className="border rounded flex items-center gap-2">
+              <button
+                onClick={handleCopy}
+                className="px-2 py-1 rounded bg-blue-500  hover:bg-blue-600 text-xs flex items-center"
+                aria-label="コピー"
+              >
+                <span className="font-mono text-sm bg-gray-300 pr-2 py-1  select-all text-left">{user.owner} </span>
+                <MdOutlineContentCopy className="text-lg w-5 h-5 min-w-5 min-h-5" />
+              </button>
+              {copied && <span className="text-green-600 text-xs ml-1 pr-2">コピーしました</span>}
             </div>
-          )}
-        </>
-      )}
-      {error && <p className="text-red-500">{error}</p>}
+            <div>
+              <p>QR Code</p>
+            </div>
+            {qrUrl && (
+              <button
+                type="button"
+                onClick={() => setModalOpen(true)}
+                className="focus:outline-none"
+                aria-label="QRコードを拡大"
+              >
+                <img src={qrUrl} alt="Principal QR" className="w-32 h-32 border rounded block mx-auto" />
+              </button>
+            )}
+            {/* モーダル */}
+            {modalOpen && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50" style={{backdropFilter: 'blur(2px)'}}>
+                <div ref={modalRef} className="bg-white p-6 rounded shadow-lg flex flex-col items-center">
+                  <img src={qrUrl!} alt="Principal QR Large" className="w-72 h-72 border rounded mb-4" />
+                  <button
+                    onClick={() => setModalOpen(false)}
+                    className="mt-2 px-4 py-2 bg-blue-500 rounded hover:bg-blue-600"
+                  >
+                    閉じる
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </main>
   );
 }
