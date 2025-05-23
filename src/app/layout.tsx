@@ -6,7 +6,7 @@ import { ClientProviders } from "./client-providers";
 const jetBrainsMono = JetBrains_Mono({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Juno / Next.js Starter",
+  title: "Wallet App",
   description: "Welcome to my app!",
 };
 

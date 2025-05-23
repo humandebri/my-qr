@@ -2,8 +2,7 @@
 "use client"; // This line is still necessary.
 
 import { useEffect, useState } from 'react';
-import { signIn, signOut, authSubscribe, type User, initSatellite, } from '@junobuild/core'; // Import initJuno
-import Link from 'next/link'; // Import Link for routing
+import { signIn, signOut,} from '@junobuild/core'; // Import initJuno
 import { useSatelliteReady, useAuth } from "../client-providers";
 import { IconII } from "../../components/icons/IconII";
 import { useRouter } from "next/navigation";
