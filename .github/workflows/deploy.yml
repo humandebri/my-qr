@@ -22,7 +22,11 @@ jobs:
       - name: Set up pnpm
         uses: pnpm/action-setup@v2
         with:
-          version: 8 # あなたのローカルの pnpm に合わせて
+          version: 8 # ローカルの pnpm のバージョンに合わせて
+          run_install: false # install を明示的に別ステップで実行する場合
+
+      - name: Enable Corepack (optional but recommended)
+        run: corepack enable
 
       - name: Install dependencies with pnpm
         run: pnpm install
