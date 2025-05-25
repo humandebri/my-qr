@@ -6,8 +6,8 @@ import { ClientProviders } from "./client-providers";
 const jetBrainsMono = JetBrains_Mono({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Wallet App",
-  description: "Welcome to my app!",
+  title: "QR Wallet",
+  description: "QR Wallet",
 };
 
 export default function RootLayout({

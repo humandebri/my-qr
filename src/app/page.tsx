@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
-import { signIn, signOut } from "@junobuild/core";
+import { useEffect, useState, useRef, useCallback } from "react";
+import { signOut } from "@junobuild/core";
 import { useSatelliteReady, useAuth } from "../app/client-providers";
 import { useRouter } from "next/navigation";
 import QRCode from "qrcode";
@@ -13,16 +13,55 @@ import { GrUpdate } from "react-icons/gr";
 import { IoIosSend } from "react-icons/io";
 import { AuthClient } from "@dfinity/auth-client";
 import { idlFactory as icpIndexIdlFactory } from "../icp_index_idl";
-import { principalToAccountIdentifier } from "../utils/accountIdentifier";
+import { principalToAccountIdentifierString } from "../utils/accountIdentifier";
 import { AiOutlineScan } from "react-icons/ai";
+import Image from "next/image";
 
-type Record = {
-  hello: string;
-};
+// 型定義
+interface TransferOperation {
+  Transfer: {
+    from: string;
+    to: string;
+    amount: { e8s: bigint };
+    fee: { e8s: bigint };
+  };
+}
+
+interface MintOperation {
+  Mint: {
+    to: string;
+    amount: { e8s: bigint };
+  };
+}
+
+interface BurnOperation {
+  Burn: {
+    from: string;
+    amount: { e8s: bigint };
+  };
+}
+
+type Operation = TransferOperation | MintOperation | BurnOperation;
+
+interface Transaction {
+  id: bigint;
+  transaction: {
+    operation: Operation;
+    timestamp?: [{ timestamp_nanos: bigint }];
+    created_at_time?: [{ timestamp_nanos: bigint }];
+    memo: bigint;
+  };
+}
+
+interface IndexResult {
+  Ok: {
+    transactions: Transaction[];
+    balance: bigint;
+    oldest_tx_id?: [bigint];
+  };
+}
 
 export default function Home() {
-
-  const [initError, setInitError] = useState<string | null>(null);
   const [qrUrl, setQrUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
@@ -35,14 +74,14 @@ export default function Home() {
   const [sendLoading, setSendLoading] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [sendSuccess, setSendSuccess] = useState<string | null>(null);
-  const [transactions, setTransactions] = useState<any[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [transactionsLoading, setTransactionsLoading] = useState(false);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [scanModalOpen, setScanModalOpen] = useState(false);
   const [scanResult, setScanResult] = useState<string | null>(null);
   const scanModalRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const scannerRef = useRef<any>(null);
+  const scannerRef = useRef<unknown>(null);
   const [scanTimeout, setScanTimeout] = useState<NodeJS.Timeout | null>(null);
 
   const isReady = useSatelliteReady();
@@ -103,30 +142,16 @@ export default function Home() {
     });
   };
 
-  // サインインしていなければ/loginへリダイレクト
-  useEffect(() => {
-    if (isReady && authLoaded && !user) {
-      router.push("/login");
-    }
-  }, [isReady, authLoaded, user, router]);
-
-  useEffect(() => {
-    if (user) {
-      const principal = user.owner;
-      const qrData = `icp://principal/${principal}`;
-      QRCode.toDataURL(qrData)
-        .then(setQrUrl)
-        .catch(console.error);
-    }
-  }, [user]);
-
   // ICP残高取得関数
-  const fetchIcpBalance = async () => {
+  const fetchIcpBalance = useCallback(async () => {
     if (!user?.owner) return;
     try {
       setBalanceLoading(true);
       const actor = await createAuthenticatedLedgerActor();
-      const result = await actor.icrc1_balance_of({ owner: Principal.fromText(user.owner || "") });
+      const result = await actor.icrc1_balance_of({ 
+        owner: Principal.fromText(user.owner || ""),
+        subaccount: []
+      });
       // e8s → ICP, 小数点以下4桁まで
       const icp = Number(result) / 100_000_000;
       setIcpBalance(icp.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 }));
@@ -136,10 +161,10 @@ export default function Home() {
     } finally {
       setBalanceLoading(false);
     }
-  };
+  }, [user?.owner]);
 
   // トランザクション履歴取得関数
-  const fetchTransactions = async () => {
+  const fetchTransactions = useCallback(async () => {
     if (!user?.owner) return;
     try {
       setTransactionsLoading(true);
@@ -162,26 +187,28 @@ export default function Home() {
         canisterId: "qhbym-qaaaa-aaaaa-aaafq-cai",
       });
 
-      // PrincipalをAccount Identifierに変換
-      const accountIdentifier = principalToAccountIdentifier(Principal.fromText(user.owner));
+      // PrincipalをAccount Identifierに変換（文字列版）
+      const accountIdentifier = principalToAccountIdentifierString(Principal.fromText(user.owner));
       
       const result = await indexActor.get_account_identifier_transactions({
-        max_results: BigInt(5),
+        max_results: BigInt(10),
         start: [],
         account_identifier: accountIdentifier,
-      });
+      }) as IndexResult | { Err: { message: string } };
 
-      if ('Ok' in (result as any)) {
-        setTransactions((result as any).Ok.transactions);
+      if ('Ok' in result) {
+        console.log('🔍 取得したトランザクションデータ:', result.Ok.transactions);
+        console.log('🔍 最初のトランザクション詳細:', result.Ok.transactions[0]);
+        setTransactions(result.Ok.transactions);
       } else {
-        console.error('トランザクション取得失敗:', (result as any).Err.message);
+        console.error('トランザクション取得失敗:', result.Err.message);
       }
     } catch (e) {
       console.error('トランザクション取得エラー:', e);
     } finally {
       setTransactionsLoading(false);
     }
-  };
+  }, [user?.owner]);
 
   // 日時変換関数
   const formatTimestamp = (timestampNanos: bigint) => {
@@ -198,30 +225,313 @@ export default function Home() {
 
   // アドレス省略表示
   const formatAddress = (address: string) => {
+    if (address === 'N/A') return 'N/A';
     return `${address.slice(0, 7)}...${address.slice(-7)}`;
   };
 
   // モバイル用アドレス省略表示（頭のみ）
   const formatAddressMobile = (address: string) => {
+    if (address === 'N/A') return 'N/A';
     return `${address.slice(0, 7)}...`;
   };
 
   // トランザクション方向判定
-  const getTransactionDirection = (transaction: any, userAccountId: string) => {
-    if ('Transfer' in transaction.operation) {
-      const transfer = transaction.operation.Transfer;
+  const getTransactionDirection = (transaction: Transaction['transaction'], userAccountId: string) => {
+    const operation = transaction.operation;
+    if ('Transfer' in operation) {
+      const transfer = operation.Transfer;
       if (transfer.to === userAccountId) return 'Received';
       if (transfer.from === userAccountId) return 'Sent';
+    } else if ('Mint' in operation) {
+      const mint = operation.Mint;
+      if (mint.to === userAccountId) return 'Minted';
+    } else if ('Burn' in operation) {
+      const burn = operation.Burn;
+      if (burn.from === userAccountId) return 'Burned';
     }
     return 'Unknown';
   };
+
+  // トランザクションから送信者を取得
+  const getTransactionFrom = (operation: Operation) => {
+    if ('Transfer' in operation) return operation.Transfer.from;
+    if ('Burn' in operation) return operation.Burn.from;
+    return 'N/A';
+  };
+
+  // トランザクションから受信者を取得
+  const getTransactionTo = (operation: Operation) => {
+    if ('Transfer' in operation) return operation.Transfer.to;
+    if ('Mint' in operation) return operation.Mint.to;
+    return 'N/A';
+  };
+
+  // トランザクションから金額を取得
+  const getTransactionAmount = (operation: Operation) => {
+    if ('Transfer' in operation) return operation.Transfer.amount.e8s;
+    if ('Mint' in operation) return operation.Mint.amount.e8s;
+    if ('Burn' in operation) return operation.Burn.amount.e8s;
+    return BigInt(0);
+  };
+
+  const handleScanClose = useCallback(() => {
+    console.log('🚪 handleScanClose開始');
+    setScanModalOpen(false);
+    setScanResult(null);
+    
+    // タイムアウトをクリア
+    if (scanTimeout) {
+      clearTimeout(scanTimeout);
+      setScanTimeout(null);
+      console.log('⏰ scanTimeout cleared in handleScanClose');
+    }
+    
+    // QRスキャナーを停止
+    if (scannerRef.current) {
+      try {
+        (scannerRef.current as { stop: () => void; destroy?: () => void; _destroyed?: boolean }).stop();
+        // 必要な場合のみdestroy（完全にクリーンアップしたい場合）
+        const scanner = scannerRef.current as { destroy?: () => void; _destroyed?: boolean };
+        if (scanner._destroyed === false && scanner.destroy) {
+          scanner.destroy();
+        }
+        console.log('🛑 QRスキャナー停止・クリーンアップ完了');
+      } catch (e) {
+        console.warn('QRスキャナー停止時のエラー:', e);
+      }
+      scannerRef.current = null;
+    }
+    
+    // カメラストリームを停止
+    if (videoRef.current && videoRef.current.srcObject) {
+      const stream = videoRef.current.srcObject as MediaStream;
+      stream.getTracks().forEach(track => track.stop());
+      videoRef.current.srcObject = null;
+      console.log('📹 カメラストリーム停止完了');
+    }
+    
+    console.log('✅ handleScanClose完了');
+  }, [scanTimeout]);
+
+  const startCamera = useCallback(async () => {
+    try {
+      console.log('🎥 カメラ開始中...');
+      
+      // 既存のストリームがあれば停止
+      if (videoRef.current && videoRef.current.srcObject) {
+        const stream = videoRef.current.srcObject as MediaStream;
+        stream.getTracks().forEach(track => track.stop());
+        videoRef.current.srcObject = null;
+      }
+      
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { 
+          facingMode: 'environment',
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        }
+      });
+      
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        
+        // videoのloadedmetadataイベントを待つ
+        await waitForVideoReady(videoRef.current);
+        
+        await videoRef.current.play();
+        console.log('✅ カメラ準備完了');
+        
+        // ★ 少し遅延してからQRスキャンを開始
+        setTimeout(() => {
+          if (scanModalOpen && videoRef.current) {
+            startQRScanning();
+          }
+        }, 100);
+      }
+    } catch (err) {
+      console.error('❌ カメラアクセスエラー:', err);
+      alert('カメラにアクセスできませんでした。ブラウザの設定を確認してください。');
+    }
+  }, [scanModalOpen]);
+
+  const startQRScanning = useCallback(async () => {
+    if (!videoRef.current) {
+      console.warn('⚠️ videoRef.currentが存在しません');
+      return;
+    }
+    
+    if (scannerRef.current) {
+      try {
+        (scannerRef.current as { stop: () => void }).stop();
+      } catch (e) {
+        console.warn('既存スキャナー停止時のエラー:', e);
+      }
+      scannerRef.current = null;
+    }
+    
+    try {
+      console.log('🔍 QRスキャナー初期化中...');
+      
+      // ✅ 推奨フロー: video.play() の後に canplay イベントを待つ
+      await waitForVideoReady(videoRef.current);
+      
+      console.log('📹 video準備完了 - QrScanner初期化開始');
+      const QrScanner = (await import('qr-scanner')).default;
+      
+      const onDecode = (result: { data: string }) => {
+        console.log('🎉 QRコード検出成功:', result.data);
+        setScanResult(result.data);
+        
+        // スキャン成功時はタイムアウトをクリア
+        if (scanTimeout) {
+          clearTimeout(scanTimeout);
+          setScanTimeout(null);
+          console.log('⏰ タイムアウトクリア完了');
+        }
+        
+        // スキャン結果の処理
+        let address = result.data;
+        console.log('📋 原アドレス:', address);
+        
+        // icp://principal/ プレフィックスを削除
+        if (address.startsWith('icp://principal/')) {
+          address = address.replace('icp://principal/', '');
+          console.log('🔧 プレフィックス削除後:', address);
+        }
+        
+        // スキャン成功後の処理（軽量なstopのみ）
+        try {
+          (scannerRef.current as { stop: () => void }).stop();
+          console.log('⏹️ スキャナー停止完了');
+          // destroyはリソース節約のため省略
+        } catch (e) {
+          console.warn('スキャナー停止時のエラー:', e);
+        }
+        scannerRef.current = null;
+        console.log('🗑️ スキャナーstate更新完了');
+        
+        // 送金先アドレスに設定
+        console.log('💰 送金先アドレス設定中:', address);
+        setToAddress(address);
+        
+        // スキャンモーダルを閉じる
+        console.log('🚪 スキャンモーダルを閉じています...');
+        handleScanClose();
+        
+        // 送金モーダルを開く（少し遅延して確実に）
+        console.log('💸 送金モーダルを開いています...');
+        setTimeout(() => {
+          setSendModalOpen(true);
+          console.log('✅ 送金モーダル表示完了');
+        }, 100);
+        
+        console.log('✅ onDecode処理完了');
+      };
+      
+      // QrScanner初期化（videoが完全に準備できた後）
+      const scanner = new QrScanner(
+        videoRef.current,
+        onDecode,
+        {
+          onDecodeError: (error: unknown) => {
+            // エラーログは最小限に（デバッグ時のみ表示）
+            if (process.env.NODE_ENV === 'development') {
+              console.debug('QR decode error:', error);
+            }
+          },
+          preferredCamera: 'environment',
+          highlightScanRegion: true,
+          highlightCodeOutline: true,
+          maxScansPerSecond: 5,
+          returnDetailedScanResult: true
+        }
+      );
+      
+      scannerRef.current = scanner;
+      
+      // スキャナー開始
+      await scanner.start();
+      
+      // ★ 追加: ハイライト描画を確実に行うための処理
+      await new Promise<void>((resolve) => {
+        // 複数フレーム待機してからリサイズイベントを発火
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            // DOMの更新を確実に反映
+            if (videoRef.current) {
+              // 強制的にリサイズイベントを発火してハイライトを再描画
+              window.dispatchEvent(new Event('resize'));
+              
+              // さらに確実にするため、少し遅延してもう一度
+              setTimeout(() => {
+                window.dispatchEvent(new Event('resize'));
+                console.log('✅ QRスキャナー開始成功 - ハイライト強制更新完了');
+              }, 100);
+            }
+            resolve();
+          });
+        });
+      });
+      
+      // ✅ シンプルなフォールバック：1回だけ再試行
+      setTimeout(async () => {
+        // スキャンが成功していない場合のみ1回だけ再試行
+        if (scanModalOpen && !scanResult && scannerRef.current) {
+          try {
+            console.log('🔄 スキャナー軽量再起動を実行');
+            await (scannerRef.current as { stop: () => Promise<void>; start: () => Promise<void> }).stop();
+            await (scannerRef.current as { stop: () => Promise<void>; start: () => Promise<void> }).start();
+            window.dispatchEvent(new Event('resize'));
+            console.log('✅ フォールバック再起動完了');
+          } catch (e) {
+            console.warn('フォールバック再起動失敗:', e);
+          }
+        }
+      }, 1200); // 2秒後に1回だけ（5秒から短縮）
+      
+    } catch (err) {
+      console.error('❌ QRスキャナーエラー:', err);
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      
+      // より詳細なエラー情報を提供
+      let userFriendlyMessage = 'QRスキャナーの初期化に失敗しました';
+      if (errorMessage.includes('worker')) {
+        userFriendlyMessage = 'ブラウザの設定によりQRスキャナーが制限されています。ページを再読み込みしてみてください。';
+      } else if (errorMessage.includes('import')) {
+        userFriendlyMessage = 'QRスキャナーライブラリの読み込みに失敗しました。ネットワーク接続を確認してください。';
+      } else if (errorMessage.includes('NotAllowedError')) {
+        userFriendlyMessage = 'カメラのアクセス許可が必要です';
+      } else if (errorMessage.includes('NotFoundError')) {
+        userFriendlyMessage = 'カメラが見つかりません';
+      }
+      
+      alert(`${userFriendlyMessage}\n\n技術的詳細: ${errorMessage}`);
+    }
+  }, [scanModalOpen, scanResult, scanTimeout, handleScanClose]);
+
+  // サインインしていなければ/loginへリダイレクト
+  useEffect(() => {
+    if (isReady && authLoaded && !user) {
+      router.push("/login");
+    }
+  }, [isReady, authLoaded, user, router]);
+
+  useEffect(() => {
+    if (user) {
+      const principal = user.owner;
+      const qrData = `icp://principal/${principal}`;
+      QRCode.toDataURL(qrData)
+        .then(setQrUrl)
+        .catch(console.error);
+    }
+  }, [user]);
 
   useEffect(() => {
     if (user?.owner) {
       fetchIcpBalance();
       fetchTransactions();
     }
-  }, [user]);
+  }, [user?.owner, fetchIcpBalance, fetchTransactions]);
 
   // モーダル外クリックで閉じる
   useEffect(() => {
@@ -257,14 +567,14 @@ export default function Home() {
     };
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
-  }, [scanModalOpen]);
+  }, [scanModalOpen, handleScanClose]);
 
   // スキャンモーダルが開いたときにカメラを開始
   useEffect(() => {
     if (scanModalOpen) {
       startCamera();
     }
-  }, [scanModalOpen]);
+  }, [scanModalOpen, startCamera]);
 
   // ✅ タブ復帰時の再スキャン強制開始
   useEffect(() => {
@@ -282,7 +592,7 @@ export default function Home() {
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [scanModalOpen]);
+  }, [scanModalOpen, startQRScanning]);
 
   // isReadyとauthLoadedが両方trueになるまで何も表示しない
   if (!isReady || !authLoaded) {
@@ -291,19 +601,6 @@ export default function Home() {
   if (!user) {
     return null;
   }
-
-  const handleSignIn = async () => {
-    try {
-      await signIn({
-        maxTimeToLive: BigInt(400) * BigInt(60) * BigInt(60) * BigInt(1_000_000_000),
-        windowed: false,
-        allowPin: true,
-      });
-    } catch (error) {
-      setInitError("ログインに失敗しました。詳細をコンソールで確認してください。");
-      console.error('Login failed:', error);
-    }
-  };
 
   // ログアウト処理
   const handleLogout = async () => {
@@ -353,7 +650,7 @@ export default function Home() {
       let toPrincipal: Principal;
       try {
         toPrincipal = Principal.fromText(toAddress);
-      } catch (e) {
+      } catch {
         setSendError("無効なPrincipalアドレスです");
         return;
       }
@@ -375,10 +672,12 @@ export default function Home() {
         created_at_time: [],
       };
 
-      const result = await actor.icrc1_transfer(transferArgs);
+      const result = await actor.icrc1_transfer(transferArgs) as 
+        | { Ok: bigint }
+        | { Err: { InsufficientFunds: { balance: bigint } } | { BadFee: { expected_fee: bigint } } | { GenericError: { message: string } } };
 
-      if ('Ok' in (result as any)) {
-        setSendSuccess(`送金が完了しました！ブロック番号: ${(result as any).Ok.toString()}`);
+      if ('Ok' in result) {
+        setSendSuccess(`送金が完了しました！ブロック番号: ${result.Ok.toString()}`);
         setToAddress("");
         setAmount("");
         // 残高を更新
@@ -392,7 +691,7 @@ export default function Home() {
         }, 3000);
       } else {
         // エラーハンドリング
-        const error = (result as any).Err;
+        const error = result.Err;
         if ('InsufficientFunds' in error) {
           setSendError(`残高不足です。利用可能残高: ${Number(error.InsufficientFunds.balance) / 100_000_000} ICP`);
         } else if ('BadFee' in error) {
@@ -413,238 +712,6 @@ export default function Home() {
 
   const handleScan = () => {
     setScanModalOpen(true);
-  };
-
-  const handleScanClose = () => {
-    console.log('🚪 handleScanClose開始');
-    setScanModalOpen(false);
-    setScanResult(null);
-    
-    // タイムアウトをクリア
-    if (scanTimeout) {
-      clearTimeout(scanTimeout);
-      setScanTimeout(null);
-      console.log('⏰ scanTimeout cleared in handleScanClose');
-    }
-    
-    // QRスキャナーを停止
-    if (scannerRef.current) {
-      try {
-        scannerRef.current.stop();
-        // 必要な場合のみdestroy（完全にクリーンアップしたい場合）
-        if (scannerRef.current._destroyed === false) {
-          scannerRef.current.destroy();
-        }
-        console.log('🛑 QRスキャナー停止・クリーンアップ完了');
-      } catch (e) {
-        console.warn('QRスキャナー停止時のエラー:', e);
-      }
-      scannerRef.current = null;
-    }
-    
-    // カメラストリームを停止
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach(track => track.stop());
-      videoRef.current.srcObject = null;
-      console.log('📹 カメラストリーム停止完了');
-    }
-    
-    console.log('✅ handleScanClose完了');
-  };
-
-  const startCamera = async () => {
-    try {
-      console.log('🎥 カメラ開始中...');
-      
-      // 既存のストリームがあれば停止
-      if (videoRef.current && videoRef.current.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream;
-        stream.getTracks().forEach(track => track.stop());
-        videoRef.current.srcObject = null;
-      }
-      
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { 
-          facingMode: 'environment',
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        }
-      });
-      
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        
-        // videoのloadedmetadataイベントを待つ
-        await waitForVideoReady(videoRef.current);
-        
-        await videoRef.current.play();
-        console.log('✅ カメラ準備完了');
-        
-        // ★ すぐにQRスキャンを開始（理想的なフローで）
-        if (scanModalOpen) {
-          startQRScanning();
-        }
-      }
-    } catch (err) {
-      console.error('❌ カメラアクセスエラー:', err);
-      alert('カメラにアクセスできませんでした。ブラウザの設定を確認してください。');
-    }
-  };
-
-  const startQRScanning = async () => {
-    if (!videoRef.current) {
-      console.warn('⚠️ videoRef.currentが存在しません');
-      return;
-    }
-    
-    if (scannerRef.current) {
-      try {
-        scannerRef.current.stop();
-      } catch (e) {
-        console.warn('既存スキャナー停止時のエラー:', e);
-      }
-      scannerRef.current = null;
-    }
-    
-    try {
-      console.log('🔍 QRスキャナー初期化中...');
-      
-      // ✅ 推奨フロー: video.play() の後に canplay イベントを待つ
-      await waitForVideoReady(videoRef.current);
-      
-      console.log('📹 video準備完了 - QrScanner初期化開始');
-      const QrScanner = (await import('qr-scanner')).default;
-      
-      const onDecode = (result: any) => {
-        console.log('🎉 QRコード検出成功:', result.data);
-        setScanResult(result.data);
-        
-        // スキャン成功時はタイムアウトをクリア
-        if (scanTimeout) {
-          clearTimeout(scanTimeout);
-          setScanTimeout(null);
-          console.log('⏰ タイムアウトクリア完了');
-        }
-        
-        // スキャン結果の処理
-        let address = result.data;
-        console.log('📋 原アドレス:', address);
-        
-        // icp://principal/ プレフィックスを削除
-        if (address.startsWith('icp://principal/')) {
-          address = address.replace('icp://principal/', '');
-          console.log('🔧 プレフィックス削除後:', address);
-        }
-        
-        // スキャン成功後の処理（軽量なstopのみ）
-        try {
-          scannerRef.current.stop();
-          console.log('⏹️ スキャナー停止完了');
-          // destroyはリソース節約のため省略
-        } catch (e) {
-          console.warn('スキャナー停止時のエラー:', e);
-        }
-        scannerRef.current = null;
-        console.log('🗑️ スキャナーstate更新完了');
-        
-        // 送金先アドレスに設定
-        console.log('💰 送金先アドレス設定中:', address);
-        setToAddress(address);
-        
-        // スキャンモーダルを閉じる
-        console.log('🚪 スキャンモーダルを閉じています...');
-        handleScanClose();
-        
-        // 送金モーダルを開く（少し遅延して確実に）
-        console.log('💸 送金モーダルを開いています...');
-        setTimeout(() => {
-          setSendModalOpen(true);
-          console.log('✅ 送金モーダル表示完了');
-        }, 100);
-        
-        console.log('✅ onDecode処理完了');
-      };
-      
-      // QrScanner初期化（videoが完全に準備できた後）
-      const scanner = new QrScanner(
-        videoRef.current,
-        onDecode,
-        {
-          onDecodeError: (error) => {
-            // エラーログは最小限に（デバッグ時のみ表示）
-            if (process.env.NODE_ENV === 'development') {
-              console.debug('QR decode error:', error);
-            }
-          },
-          preferredCamera: 'environment',
-          highlightScanRegion: true,
-          highlightCodeOutline: true,
-          maxScansPerSecond: 5,
-          returnDetailedScanResult: true
-        }
-      );
-      
-      scannerRef.current = scanner;
-      
-      // スキャナー開始
-      await scanner.start();
-      
-      // ★ 追加: ハイライト描画を確実に行うための処理
-      await new Promise((resolve) => {
-        // 複数フレーム待機してからリサイズイベントを発火
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            // DOMの更新を確実に反映
-            if (videoRef.current) {
-              // 強制的にリサイズイベントを発火してハイライトを再描画
-              window.dispatchEvent(new Event('resize'));
-              
-              // さらに確実にするため、少し遅延してもう一度
-              setTimeout(() => {
-                window.dispatchEvent(new Event('resize'));
-                console.log('✅ QRスキャナー開始成功 - ハイライト強制更新完了');
-              }, 100);
-            }
-            resolve(undefined);
-          });
-        });
-      });
-      
-      // ✅ シンプルなフォールバック：1回だけ再試行
-      setTimeout(async () => {
-        // スキャンが成功していない場合のみ1回だけ再試行
-        if (scanModalOpen && !scanResult && scannerRef.current) {
-          try {
-            console.log('🔄 スキャナー軽量再起動を実行');
-            await scannerRef.current.stop();
-            await scannerRef.current.start();
-            window.dispatchEvent(new Event('resize'));
-            console.log('✅ フォールバック再起動完了');
-          } catch (e) {
-            console.warn('フォールバック再起動失敗:', e);
-          }
-        }
-      }, 1200); // 2秒後に1回だけ（5秒から短縮）
-      
-    } catch (err) {
-      console.error('❌ QRスキャナーエラー:', err);
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      
-      // より詳細なエラー情報を提供
-      let userFriendlyMessage = 'QRスキャナーの初期化に失敗しました';
-      if (errorMessage.includes('worker')) {
-        userFriendlyMessage = 'ブラウザの設定によりQRスキャナーが制限されています。ページを再読み込みしてみてください。';
-      } else if (errorMessage.includes('import')) {
-        userFriendlyMessage = 'QRスキャナーライブラリの読み込みに失敗しました。ネットワーク接続を確認してください。';
-      } else if (errorMessage.includes('NotAllowedError')) {
-        userFriendlyMessage = 'カメラのアクセス許可が必要です';
-      } else if (errorMessage.includes('NotFoundError')) {
-        userFriendlyMessage = 'カメラが見つかりません';
-      }
-      
-      alert(`${userFriendlyMessage}\n\n技術的詳細: ${errorMessage}`);
-    }
   };
 
   // ログイン済みの場合のみUIを表示
@@ -706,7 +773,7 @@ export default function Home() {
                   className="focus:outline-none"
                   aria-label="QRコードを拡大"
                 >
-                  <img src={qrUrl} alt="Principal QR" className="w-32 h-32 border rounded block mx-auto" />
+                  <Image src={qrUrl} alt="Principal QR" width={128} height={128} className="w-32 h-32 border rounded block mx-auto" />
                 </button>
                 <div className="flex  gap-2 ">
                   <button 
@@ -730,7 +797,7 @@ export default function Home() {
             {modalOpen && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50" style={{backdropFilter: 'blur(2px)'}}>
                 <div ref={modalRef} className="bg-white p-6 rounded shadow-lg flex flex-col items-center">
-                  <img src={qrUrl!} alt="Principal QR Large" className="w-72 h-72 border rounded mb-4" />
+                  <Image src={qrUrl!} alt="Principal QR Large" width={288} height={288} className="w-72 h-72 border rounded mb-4" />
                   <button
                     onClick={() => setModalOpen(false)}
                     className=" px-4  rounded hover:bg-blue-600 text-black"
@@ -774,9 +841,9 @@ export default function Home() {
                 </thead>
                 <tbody>
                   {transactions.map((tx) => {
-                    const userAccountId = user?.owner ? principalToAccountIdentifier(Principal.fromText(user.owner)) : '';
+                    const userAccountId = user?.owner ? principalToAccountIdentifierString(Principal.fromText(user.owner)) : '';
                     const direction = getTransactionDirection(tx.transaction, userAccountId);
-                    const transfer = 'Transfer' in tx.transaction.operation ? tx.transaction.operation.Transfer : null;
+                    const operation = tx.transaction.operation;
                     
                     return (
                       <tr key={tx.id.toString()} className="border-b border-white">
@@ -784,21 +851,20 @@ export default function Home() {
                         <td className="py-2">
                           {tx.transaction.timestamp?.[0] 
                             ? formatTimestamp(tx.transaction.timestamp[0].timestamp_nanos)
+                            : tx.transaction.created_at_time?.[0]
+                            ? formatTimestamp(tx.transaction.created_at_time[0].timestamp_nanos)
                             : 'N/A'
                           }
                         </td>
                         <td className="py-2">
-                          {transfer ? formatAddress(transfer.from) : 'N/A'}
+                          {formatAddress(getTransactionFrom(operation))}
                         </td>
                         <td className="py-2">
-                          {transfer ? formatAddress(transfer.to) : 'N/A'}
+                          {formatAddress(getTransactionTo(operation))}
                         </td>
                         <td className="py-2">{direction}</td>
                         <td className="py-2">
-                          {transfer 
-                            ? `${(Number(transfer.amount.e8s) / 100_000_000).toFixed(4)} ICP`
-                            : 'N/A'
-                          }
+                          {`${(Number(getTransactionAmount(operation)) / 100_000_000).toFixed(4)} ICP`}
                         </td>
                       </tr>
                     );
@@ -817,21 +883,18 @@ export default function Home() {
                 </thead>
                 <tbody>
                   {transactions.map((tx) => {
-                    const transfer = 'Transfer' in tx.transaction.operation ? tx.transaction.operation.Transfer : null;
+                    const operation = tx.transaction.operation;
                     
                     return (
                       <tr key={tx.id.toString()} className="border-b border-white">
                         <td className="py-2">
-                          {transfer ? formatAddressMobile(transfer.from) : 'N/A'}
+                          {formatAddressMobile(getTransactionFrom(operation))}
                         </td>
                         <td className="py-2">
-                          {transfer ? formatAddressMobile(transfer.to) : 'N/A'}
+                          {formatAddressMobile(getTransactionTo(operation))}
                         </td>
                         <td className="py-2">
-                          {transfer 
-                            ? `${(Number(transfer.amount.e8s) / 100_000_000).toFixed(4)} ICP`
-                            : 'N/A'
-                          }
+                          {`${(Number(getTransactionAmount(operation)) / 100_000_000).toFixed(4)} ICP`}
                         </td>
                       </tr>
                     );
@@ -939,10 +1002,7 @@ export default function Home() {
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                 <div className="w-48 h-48 border-4 border-blue-400 rounded-lg animate-pulse"></div>
               </div>
-              {/* スキャン状態表示 */}
-              <div className="absolute top-2 left-2 bg-black/70 text-white px-2 py-1 rounded text-xs">
-                {scannerRef.current ? '🔍 スキャン中...' : '📹 カメラ準備中...'}
-              </div>
+
             </div>
             
             <div className="mt-4 space-y-2">

@@ -2,7 +2,7 @@
 "use client"; // This line is still necessary.
 
 import { useEffect, useState } from 'react';
-import { signIn, signOut,} from '@junobuild/core'; // Import initJuno
+import { signIn } from '@junobuild/core'; // Import initJuno
 import { useSatelliteReady, useAuth } from "../client-providers";
 import { IconII } from "../../components/icons/IconII";
 import { useRouter } from "next/navigation";
@@ -33,15 +33,6 @@ export default function Home() {
     } catch (error) {
       setInitError("ログインに失敗しました。詳細をコンソールで確認してください。");
       console.error('Login failed:', error);
-    }
-  };
-
-  const handleSignOut = async () => {
-    try {
-      await signOut();
-    } catch (error) {
-      console.error('Logout failed:', error);
-      alert('ログアウトに失敗しました。詳細をコンソールで確認してください。');
     }
   };
 

@@ -1,8 +1,8 @@
 import { Principal } from "@dfinity/principal";
 import { sha224 } from "js-sha256";
 
-// ICP Account Identifier生成
-export function principalToAccountIdentifier(principal: Principal): string {
+// ICP Account Identifier生成（バイト配列版）
+export function principalToAccountIdentifier(principal: Principal): Uint8Array {
   const domain_separator = "\x0Aaccount-id";
   const payload = new Uint8Array([
     ...new TextEncoder().encode(domain_separator),
@@ -21,6 +21,12 @@ export function principalToAccountIdentifier(principal: Principal): string {
   view.setUint32(0, crc32, false); // big-endian
   accountId.set(new Uint8Array(Buffer.from(hash, 'hex')), 4);
   
+  return accountId;
+}
+
+// ICP Account Identifier生成（文字列版）
+export function principalToAccountIdentifierString(principal: Principal): string {
+  const accountId = principalToAccountIdentifier(principal);
   return Array.from(accountId)
     .map(b => b.toString(16).padStart(2, '0'))
     .join('');
