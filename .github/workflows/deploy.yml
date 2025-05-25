@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out the repo
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up Node.js
@@ -22,10 +22,7 @@ jobs:
       - name: Set up pnpm
         uses: pnpm/action-setup@v2
         with:
-          version: 8
-
-      - name: Enable Corepack
-        run: corepack enable
+          version: 8 # 任意のpnpmバージョン
 
       - name: Install dependencies
         run: pnpm install
