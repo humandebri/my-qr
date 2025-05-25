@@ -42,11 +42,40 @@ export default function Home() {
   const [scanResult, setScanResult] = useState<string | null>(null);
   const scanModalRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [qrScanner, setQrScanner] = useState<any>(null);
+  const scannerRef = useRef<any>(null);
+  const [scanTimeout, setScanTimeout] = useState<NodeJS.Timeout | null>(null);
 
   const isReady = useSatelliteReady();
   const { user, authLoaded } = useAuth();
   const router = useRouter();
+
+  // ✅ videoの準備状態を厳密にチェックする共通関数
+  const waitForVideoReady = async (videoEl: HTMLVideoElement): Promise<void> => {
+    return new Promise((resolve) => {
+      const checkReady = () => {
+        if (
+          videoEl.readyState >= 3 &&
+          videoEl.videoWidth > 0 &&
+          videoEl.videoHeight > 0
+        ) {
+          console.log('📐 video完全準備完了:', {
+            readyState: videoEl.readyState,
+            videoWidth: videoEl.videoWidth,
+            videoHeight: videoEl.videoHeight
+          });
+          resolve();
+        } else {
+          console.debug('⏳ video準備待機中:', {
+            readyState: videoEl.readyState,
+            videoWidth: videoEl.videoWidth,
+            videoHeight: videoEl.videoHeight
+          });
+          requestAnimationFrame(checkReady);
+        }
+      };
+      checkReady();
+    });
+  };
 
   // 認証されたLedger Actorを作成する共通関数
   const createAuthenticatedLedgerActor = async () => {
@@ -237,6 +266,24 @@ export default function Home() {
     }
   }, [scanModalOpen]);
 
+  // ✅ タブ復帰時の再スキャン強制開始
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && scanModalOpen && videoRef.current) {
+        console.log('👀 タブ復帰 → 再スキャン強制開始');
+        // 少し遅延してからスキャンを再開始
+        setTimeout(() => {
+          if (scanModalOpen && videoRef.current) {
+            startQRScanning();
+          }
+        }, 500);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [scanModalOpen]);
+
   // isReadyとauthLoadedが両方trueになるまで何も表示しない
   if (!isReady || !authLoaded) {
     return null;
@@ -369,18 +416,30 @@ export default function Home() {
   };
 
   const handleScanClose = () => {
+    console.log('🚪 handleScanClose開始');
     setScanModalOpen(false);
     setScanResult(null);
     
+    // タイムアウトをクリア
+    if (scanTimeout) {
+      clearTimeout(scanTimeout);
+      setScanTimeout(null);
+      console.log('⏰ scanTimeout cleared in handleScanClose');
+    }
+    
     // QRスキャナーを停止
-    if (qrScanner) {
+    if (scannerRef.current) {
       try {
-        qrScanner.stop();
-        qrScanner.destroy();
+        scannerRef.current.stop();
+        // 必要な場合のみdestroy（完全にクリーンアップしたい場合）
+        if (scannerRef.current._destroyed === false) {
+          scannerRef.current.destroy();
+        }
+        console.log('🛑 QRスキャナー停止・クリーンアップ完了');
       } catch (e) {
         console.warn('QRスキャナー停止時のエラー:', e);
       }
-      setQrScanner(null);
+      scannerRef.current = null;
     }
     
     // カメラストリームを停止
@@ -388,7 +447,10 @@ export default function Home() {
       const stream = videoRef.current.srcObject as MediaStream;
       stream.getTracks().forEach(track => track.stop());
       videoRef.current.srcObject = null;
+      console.log('📹 カメラストリーム停止完了');
     }
+    
+    console.log('✅ handleScanClose完了');
   };
 
   const startCamera = async () => {
@@ -414,13 +476,7 @@ export default function Home() {
         videoRef.current.srcObject = stream;
         
         // videoのloadedmetadataイベントを待つ
-        await new Promise<void>((resolve) => {
-          const handleLoadedMetadata = () => {
-            videoRef.current?.removeEventListener('loadedmetadata', handleLoadedMetadata);
-            resolve();
-          };
-          videoRef.current?.addEventListener('loadedmetadata', handleLoadedMetadata);
-        });
+        await waitForVideoReady(videoRef.current);
         
         await videoRef.current.play();
         console.log('✅ カメラ準備完了');
@@ -442,42 +498,20 @@ export default function Home() {
       return;
     }
     
-    if (qrScanner) {
+    if (scannerRef.current) {
       try {
-        qrScanner.stop();
-        qrScanner.destroy();
+        scannerRef.current.stop();
       } catch (e) {
         console.warn('既存スキャナー停止時のエラー:', e);
       }
-      setQrScanner(null);
+      scannerRef.current = null;
     }
     
     try {
       console.log('🔍 QRスキャナー初期化中...');
       
       // ✅ 推奨フロー: video.play() の後に canplay イベントを待つ
-      await new Promise<void>((resolve) => {
-        if (videoRef.current!.readyState >= 3) {
-          console.log('🎬 既にcanplay状態 - readyState:', videoRef.current!.readyState);
-          resolve();
-        } else {
-          console.log('⏳ canplayイベントを待機中 - readyState:', videoRef.current!.readyState);
-          videoRef.current?.addEventListener('canplay', () => resolve(), { once: true });
-        }
-      });
-      
-      // ★ 追加: video要素のサイズが実際に確定するまで待つ
-      await new Promise<void>((resolve) => {
-        const checkVideoSize = () => {
-          if (videoRef.current && videoRef.current.videoWidth > 0 && videoRef.current.videoHeight > 0) {
-            console.log('📐 videoサイズ確定:', videoRef.current.videoWidth, 'x', videoRef.current.videoHeight);
-            resolve();
-          } else {
-            requestAnimationFrame(checkVideoSize);
-          }
-        };
-        checkVideoSize();
-      });
+      await waitForVideoReady(videoRef.current);
       
       console.log('📹 video準備完了 - QrScanner初期化開始');
       const QrScanner = (await import('qr-scanner')).default;
@@ -486,27 +520,50 @@ export default function Home() {
         console.log('🎉 QRコード検出成功:', result.data);
         setScanResult(result.data);
         
+        // スキャン成功時はタイムアウトをクリア
+        if (scanTimeout) {
+          clearTimeout(scanTimeout);
+          setScanTimeout(null);
+          console.log('⏰ タイムアウトクリア完了');
+        }
+        
         // スキャン結果の処理
         let address = result.data;
+        console.log('📋 原アドレス:', address);
         
         // icp://principal/ プレフィックスを削除
         if (address.startsWith('icp://principal/')) {
           address = address.replace('icp://principal/', '');
+          console.log('🔧 プレフィックス削除後:', address);
         }
         
-        // スキャン成功後の処理
+        // スキャン成功後の処理（軽量なstopのみ）
         try {
-          scanner.stop();
-          scanner.destroy();
+          scannerRef.current.stop();
+          console.log('⏹️ スキャナー停止完了');
+          // destroyはリソース節約のため省略
         } catch (e) {
           console.warn('スキャナー停止時のエラー:', e);
         }
-        setQrScanner(null);
+        scannerRef.current = null;
+        console.log('🗑️ スキャナーstate更新完了');
+        
+        // 送金先アドレスに設定
+        console.log('💰 送金先アドレス設定中:', address);
+        setToAddress(address);
+        
+        // スキャンモーダルを閉じる
+        console.log('🚪 スキャンモーダルを閉じています...');
         handleScanClose();
         
-        // 送金先アドレスに設定して送金モーダルを開く
-        setToAddress(address);
-        setSendModalOpen(true);
+        // 送金モーダルを開く（少し遅延して確実に）
+        console.log('💸 送金モーダルを開いています...');
+        setTimeout(() => {
+          setSendModalOpen(true);
+          console.log('✅ 送金モーダル表示完了');
+        }, 100);
+        
+        console.log('✅ onDecode処理完了');
       };
       
       // QrScanner初期化（videoが完全に準備できた後）
@@ -528,7 +585,7 @@ export default function Home() {
         }
       );
       
-      setQrScanner(scanner);
+      scannerRef.current = scanner;
       
       // スキャナー開始
       await scanner.start();
@@ -553,6 +610,22 @@ export default function Home() {
           });
         });
       });
+      
+      // ✅ シンプルなフォールバック：1回だけ再試行
+      setTimeout(async () => {
+        // スキャンが成功していない場合のみ1回だけ再試行
+        if (scanModalOpen && !scanResult && scannerRef.current) {
+          try {
+            console.log('🔄 スキャナー軽量再起動を実行');
+            await scannerRef.current.stop();
+            await scannerRef.current.start();
+            window.dispatchEvent(new Event('resize'));
+            console.log('✅ フォールバック再起動完了');
+          } catch (e) {
+            console.warn('フォールバック再起動失敗:', e);
+          }
+        }
+      }, 1200); // 2秒後に1回だけ（5秒から短縮）
       
     } catch (err) {
       console.error('❌ QRスキャナーエラー:', err);
@@ -868,7 +941,7 @@ export default function Home() {
               </div>
               {/* スキャン状態表示 */}
               <div className="absolute top-2 left-2 bg-black/70 text-white px-2 py-1 rounded text-xs">
-                {qrScanner ? '🔍 スキャン中...' : '📹 カメラ準備中...'}
+                {scannerRef.current ? '🔍 スキャン中...' : '📹 カメラ準備中...'}
               </div>
             </div>
             
