@@ -273,7 +273,7 @@ export default function Home() {
   };
 
   const handleSend = () => {
-    setScanModalOpen(true);
+    setSendModalOpen(true);
   };
 
   const handleMaxAmount = () => {
@@ -369,17 +369,14 @@ export default function Home() {
   };
 
   const handleScanClose = () => {
-    console.log('🔄 スキャンモーダルを閉じています...');
     setScanModalOpen(false);
     setScanResult(null);
     
     // QRスキャナーを停止
     if (qrScanner) {
       try {
-        console.log('🛑 QRスキャナーを停止中...');
         qrScanner.stop();
         qrScanner.destroy();
-        console.log('✅ QRスキャナー停止完了');
       } catch (e) {
         console.warn('QRスキャナー停止時のエラー:', e);
       }
@@ -389,18 +386,14 @@ export default function Home() {
     // カメラストリームを停止
     if (videoRef.current && videoRef.current.srcObject) {
       const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach(track => {
-        console.log('🎥 カメラトラックを停止:', track.label);
-        track.stop();
-      });
+      stream.getTracks().forEach(track => track.stop());
       videoRef.current.srcObject = null;
-      console.log('✅ カメラストリーム停止完了');
     }
   };
 
   const startCamera = async () => {
     try {
-      console.log('🎥 カメラ開始を試行中...');
+      console.log('🎥 カメラ開始中...');
       
       // 既存のストリームがあれば停止
       if (videoRef.current && videoRef.current.srcObject) {
@@ -430,14 +423,12 @@ export default function Home() {
         });
         
         await videoRef.current.play();
-        console.log('✅ カメラストリーム開始成功');
+        console.log('✅ カメラ準備完了');
         
-        // カメラが完全に準備できてからQRスキャンを開始
-        setTimeout(() => {
-          if (scanModalOpen) { // モーダルがまだ開いている場合のみ
-            startQRScanning();
-          }
-        }, 1500);
+        // ★ すぐにQRスキャンを開始（理想的なフローで）
+        if (scanModalOpen) {
+          startQRScanning();
+        }
       }
     } catch (err) {
       console.error('❌ カメラアクセスエラー:', err);
@@ -452,7 +443,6 @@ export default function Home() {
     }
     
     if (qrScanner) {
-      console.log('⚠️ 既存のQRスキャナーが存在します。停止して再作成します。');
       try {
         qrScanner.stop();
         qrScanner.destroy();
@@ -464,97 +454,123 @@ export default function Home() {
     
     try {
       console.log('🔍 QRスキャナー初期化中...');
+      
+      // ✅ 推奨フロー: video.play() の後に canplay イベントを待つ
+      await new Promise<void>((resolve) => {
+        if (videoRef.current!.readyState >= 3) {
+          console.log('🎬 既にcanplay状態 - readyState:', videoRef.current!.readyState);
+          resolve();
+        } else {
+          console.log('⏳ canplayイベントを待機中 - readyState:', videoRef.current!.readyState);
+          videoRef.current?.addEventListener('canplay', () => resolve(), { once: true });
+        }
+      });
+      
+      // ★ 追加: video要素のサイズが実際に確定するまで待つ
+      await new Promise<void>((resolve) => {
+        const checkVideoSize = () => {
+          if (videoRef.current && videoRef.current.videoWidth > 0 && videoRef.current.videoHeight > 0) {
+            console.log('📐 videoサイズ確定:', videoRef.current.videoWidth, 'x', videoRef.current.videoHeight);
+            resolve();
+          } else {
+            requestAnimationFrame(checkVideoSize);
+          }
+        };
+        checkVideoSize();
+      });
+      
+      console.log('📹 video準備完了 - QrScanner初期化開始');
       const QrScanner = (await import('qr-scanner')).default;
       
-      console.log('📁 QRスキャナークラス読み込み完了');
-      console.log('🏗️ QrScanner version:', QrScanner.DEFAULT_CANVAS_SIZE);
+      const onDecode = (result: any) => {
+        console.log('🎉 QRコード検出成功:', result.data);
+        setScanResult(result.data);
+        
+        // スキャン結果の処理
+        let address = result.data;
+        
+        // icp://principal/ プレフィックスを削除
+        if (address.startsWith('icp://principal/')) {
+          address = address.replace('icp://principal/', '');
+        }
+        
+        // スキャン成功後の処理
+        try {
+          scanner.stop();
+          scanner.destroy();
+        } catch (e) {
+          console.warn('スキャナー停止時のエラー:', e);
+        }
+        setQrScanner(null);
+        handleScanClose();
+        
+        // 送金先アドレスに設定して送金モーダルを開く
+        setToAddress(address);
+        setSendModalOpen(true);
+      };
       
+      // QrScanner初期化（videoが完全に準備できた後）
       const scanner = new QrScanner(
         videoRef.current,
-        (result) => {
-          console.log('🎉 QRコード検出成功:', result.data);
-          setScanResult(result.data);
-          
-          // スキャン結果の処理
-          let address = result.data;
-          
-          // icp://principal/ プレフィックスを削除
-          if (address.startsWith('icp://principal/')) {
-            address = address.replace('icp://principal/', '');
-            console.log('🔄 プレフィックス削除後:', address);
-          }
-          
-          // スキャン成功後の処理
-          try {
-            scanner.stop();
-            scanner.destroy();
-          } catch (e) {
-            console.warn('スキャナー停止時のエラー:', e);
-          }
-          setQrScanner(null);
-          handleScanClose();
-          
-          // 送金先アドレスに設定して送金モーダルを開く
-          setToAddress(address);
-          setSendModalOpen(true);
-        },
+        onDecode,
         {
           onDecodeError: (error) => {
-            // デコードエラーのログを表示
-            console.log('🔍 デコード試行中...', error);
+            // エラーログは最小限に（デバッグ時のみ表示）
+            if (process.env.NODE_ENV === 'development') {
+              console.debug('QR decode error:', error);
+            }
           },
-          highlightScanRegion: false, // 一旦無効にして全画面スキャン
+          preferredCamera: 'environment',
+          highlightScanRegion: true,
           highlightCodeOutline: true,
-          returnDetailedScanResult: true,
-          maxScansPerSecond: 5, // フレームレートを上げる
+          maxScansPerSecond: 5,
+          returnDetailedScanResult: true
         }
       );
       
       setQrScanner(scanner);
       
-      console.log('▶️ QRスキャナー開始前...');
+      // スキャナー開始
+      await scanner.start();
       
-      // Workerの詳細デバッグ
-      scanner.start().then(() => {
-        console.log('✅ QRスキャナー開始成功 - Worker起動完了');
-        
-        // Workerのメッセージを監視
-        const scannerWithWorker = scanner as any;
-        if (scannerWithWorker.$worker) {
-          console.log('👷 Worker インスタンス確認完了');
-          scannerWithWorker.$worker.addEventListener('message', (e: MessageEvent) => {
-            console.log('📨 Worker message:', e.data);
+      // ★ 追加: ハイライト描画を確実に行うための処理
+      await new Promise((resolve) => {
+        // 複数フレーム待機してからリサイズイベントを発火
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            // DOMの更新を確実に反映
+            if (videoRef.current) {
+              // 強制的にリサイズイベントを発火してハイライトを再描画
+              window.dispatchEvent(new Event('resize'));
+              
+              // さらに確実にするため、少し遅延してもう一度
+              setTimeout(() => {
+                window.dispatchEvent(new Event('resize'));
+                console.log('✅ QRスキャナー開始成功 - ハイライト強制更新完了');
+              }, 100);
+            }
+            resolve(undefined);
           });
-          
-          scannerWithWorker.$worker.addEventListener('error', (e: ErrorEvent) => {
-            console.error('❌ Worker error:', e);
-          });
-        } else {
-          console.warn('⚠️ Worker インスタンスが見つかりません');
-        }
-        
-        // デコード状況を定期的にチェック
-        const debugInterval = setInterval(() => {
-          if (!scanModalOpen) {
-            clearInterval(debugInterval);
-            return;
-          }
-          console.log('🔄 スキャン中... (画面に明るく大きなQRコードを映してください)');
-        }, 3000);
-        
-      }).catch((err: Error) => {
-        console.error('❌ QRスキャナー開始失敗:', err);
-        if (err.message.includes('NotAllowedError')) {
-          alert('カメラへのアクセスが拒否されました。ブラウザの設定でカメラアクセスを許可してください。');
-        } else if (err.message.includes('CSP')) {
-          alert('セキュリティポリシー(CSP)によりWorkerが起動できません。');
-        }
+        });
       });
       
     } catch (err) {
       console.error('❌ QRスキャナーエラー:', err);
       const errorMessage = err instanceof Error ? err.message : String(err);
-      alert(`QRスキャナーの初期化に失敗しました: ${errorMessage}`);
+      
+      // より詳細なエラー情報を提供
+      let userFriendlyMessage = 'QRスキャナーの初期化に失敗しました';
+      if (errorMessage.includes('worker')) {
+        userFriendlyMessage = 'ブラウザの設定によりQRスキャナーが制限されています。ページを再読み込みしてみてください。';
+      } else if (errorMessage.includes('import')) {
+        userFriendlyMessage = 'QRスキャナーライブラリの読み込みに失敗しました。ネットワーク接続を確認してください。';
+      } else if (errorMessage.includes('NotAllowedError')) {
+        userFriendlyMessage = 'カメラのアクセス許可が必要です';
+      } else if (errorMessage.includes('NotFoundError')) {
+        userFriendlyMessage = 'カメラが見つかりません';
+      }
+      
+      alert(`${userFriendlyMessage}\n\n技術的詳細: ${errorMessage}`);
     }
   };
 
@@ -852,43 +868,22 @@ export default function Home() {
               </div>
               {/* スキャン状態表示 */}
               <div className="absolute top-2 left-2 bg-black/70 text-white px-2 py-1 rounded text-xs">
-                {qrScanner ? 'スキャン中...' : 'カメラ準備中...'}
+                {qrScanner ? '🔍 スキャン中...' : '📹 カメラ準備中...'}
               </div>
             </div>
             
-            <p className="text-center text-sm text-gray-600 mt-4">
-              QRコードを青い枠内に合わせてください
-            </p>
-            
-            {/* デバッグ情報表示 */}
-            {scanResult && (
-              <div className="mt-2 p-2 bg-green-100 rounded text-xs text-gray-700">
-                <strong>検出結果:</strong> {scanResult}
-              </div>
-            )}
-            
-            {/* テスト用: 手動でアドレスを入力 */}
-            <details className="mt-4">
-              <summary className="text-xs text-gray-500 cursor-pointer">手動入力（テスト用）</summary>
-              <input
-                type="text"
-                placeholder="Principal アドレスを入力"
-                className="w-full mt-2 px-2 py-1 text-xs border rounded text-black"
-                onKeyPress={(e) => {
-                  if (e.key === 'Enter') {
-                    const value = (e.target as HTMLInputElement).value;
-                    if (value.trim()) {
-                      setToAddress(value.trim());
-                      handleScanClose();
-                      setSendModalOpen(true);
-                    }
-                  }
-                }}
-              />
-              <p className="text-xs text-gray-400 mt-1">Enterキーで送金画面へ</p>
-              
+            <div className="mt-4 space-y-2">
+              <p className="text-center text-sm text-gray-600">
+                QRコードを青い枠内に合わせてください
+              </p>
+              <p className="text-center text-xs text-gray-500">
+                📱 カメラが暗い場合は照明を当ててください
+              </p>
+              <p className="text-center text-xs text-gray-500">
+                🔄 動作しない場合はページを再読み込みしてください
+              </p>
+            </div>
 
-            </details>
           </div>
         </div>
       )}
