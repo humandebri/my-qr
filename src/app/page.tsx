@@ -624,7 +624,10 @@ export default function Home() {
     if (icpBalance) {
       // コンマを除去して数値として扱う
       const balance = parseFloat(icpBalance.replace(/,/g, ''));
-      setAmount(balance.toString());
+      // 送金手数料0.0001 ICPを差し引く
+      const fee = 0.0001;
+      const maxSendableAmount = Math.max(0, balance - fee);
+      setAmount(maxSendableAmount.toFixed(4));
     }
   };
 

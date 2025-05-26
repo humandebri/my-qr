@@ -4,7 +4,7 @@
 npm create juno@latest -- --template nextjs-starter
 ```
 
-![デモアプリのスクリーンショット](https://raw.githubusercontent.com/junobuild/create-juno/main/screenshots/screenshot-starter.png)
+![デモアプリのスクリーンショット](https://github.com/humandebri/my-qr/blob/main/public/ss.png)
 
 ICPブロックチェーン上でQRコードを使った決済機能を実装したデモアプリケーションです。[Juno](https://juno.build)と[Next.js](https://nextjs.org/docs)を使用して開発されています。
 
