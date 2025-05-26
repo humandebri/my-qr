@@ -1,4 +1,3 @@
-
 import { defineConfig } from "@junobuild/config";
 
 /** @type {import('@junobuild/config').JunoConfig} */
@@ -9,6 +8,6 @@ export default defineConfig({
       production: 'poonz-yiaaa-aaaal-ar3qa-cai'
     },
     source: "out",
-    predeploy: ["npm run build"],
+    predeploy: ["npm run build"]
   },
 });

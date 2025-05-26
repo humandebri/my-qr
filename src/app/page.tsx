@@ -16,6 +16,7 @@ import { idlFactory as icpIndexIdlFactory } from "../icp_index_idl";
 import { principalToAccountIdentifierString } from "../utils/accountIdentifier";
 import { AiOutlineScan } from "react-icons/ai";
 import Image from "next/image";
+import { AUTH_CONFIG } from "../config/auth";
 
 // 型定義
 interface TransferOperation {
@@ -123,7 +124,12 @@ export default function Home() {
       throw new Error("この機能はセキュアな環境（HTTPS）またはサポートされたブラウザでのみ利用可能です。");
     }
 
-    const authClient = await AuthClient.create();
+    const authClient = await AuthClient.create({
+      idleOptions: {
+        idleTimeout: AUTH_CONFIG.IDLE_TIMEOUT,
+        disableDefaultIdleCallback: AUTH_CONFIG.DISABLE_DEFAULT_IDLE_CALLBACK,
+      }
+    });
     const identity = authClient.getIdentity();
 
     const isLocal = typeof window !== "undefined" && window.location.hostname === "localhost";
@@ -169,7 +175,12 @@ export default function Home() {
     try {
       setTransactionsLoading(true);
       
-      const authClient = await AuthClient.create();
+      const authClient = await AuthClient.create({
+        idleOptions: {
+          idleTimeout: AUTH_CONFIG.IDLE_TIMEOUT,
+          disableDefaultIdleCallback: AUTH_CONFIG.DISABLE_DEFAULT_IDLE_CALLBACK,
+        }
+      });
       const identity = authClient.getIdentity();
 
       const isLocal = typeof window !== "undefined" && window.location.hostname === "localhost";

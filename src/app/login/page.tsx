@@ -6,6 +6,7 @@ import { signIn } from '@junobuild/core'; // Import initJuno
 import { useSatelliteReady, useAuth } from "../client-providers";
 import { IconII } from "../../components/icons/IconII";
 import { useRouter } from "next/navigation";
+import { AUTH_CONFIG } from "../../config/auth";
 
 // Principal type is not needed if user.owner is string, but kept commented out for reference.
 // import { Principal } from '@dfinity/principal'; 
@@ -26,9 +27,9 @@ export default function Home() {
   const handleSignIn = async () => {
     try {
       await signIn({
-        maxTimeToLive: BigInt(400) * BigInt(60) * BigInt(60) * BigInt(1_000_000_000),
-        windowed: false,
-        allowPin: true,
+        maxTimeToLive: AUTH_CONFIG.MAX_TIME_TO_LIVE,
+        windowed: AUTH_CONFIG.WINDOWED,
+        allowPin: AUTH_CONFIG.ALLOW_PIN,
       });
     } catch (error) {
       setInitError("ログインに失敗しました。詳細をコンソールで確認してください。");
