@@ -40,13 +40,7 @@ jobs:
       - name: Install dependencies
         run: |
           echo "Installing dependencies..."
-          if [ -f pnpm-lock.yaml ]; then
-            echo "Using frozen lockfile"
-            pnpm install --frozen-lockfile
-          else
-            echo "No lockfile found, installing without frozen lockfile"
-            pnpm install
-          fi
+          pnpm install --no-frozen-lockfile
 
       - name: Deploy to Juno
         run: npx juno deploy
