@@ -10,28 +10,26 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      # Node はキャッシュ指定なしで入れる
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      # pnpm を入れる（このアクションが自動で依存キャッシュを張ります）
-      - uses: pnpm/action-setup@v2
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
         with:
-          version: 8          # プロジェクトに合わせて
-          run_install: false  # install は後で明示的に
+          version: 8
+          run_install: false
 
-      # 依存インストール
-      - run: pnpm install --frozen-lockfile
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: ./my-qr
 
-      # （ビルドが必要なら）- run: pnpm run build
-
-      # デプロイ
-      - uses: junobuild/juno-action@main
-        with:
-          args: deploy
+      - name: Deploy to Juno
+        run: npx juno deploy
+        working-directory: ./my-qr
         env:
           JUNO_TOKEN: ${{ secrets.JUNO_TOKEN }}
-        working-directory: ./my-qr
