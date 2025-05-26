@@ -42,7 +42,10 @@ jobs:
           echo "Installing dependencies..."
           pnpm install --no-frozen-lockfile
 
+      - name: Install Juno CLI
+        run: pnpm add -g @junobuild/cli
+
       - name: Deploy to Juno
-        run: npx juno deploy
+        run: juno deploy
         env:
           JUNO_TOKEN: ${{ secrets.JUNO_TOKEN }}
