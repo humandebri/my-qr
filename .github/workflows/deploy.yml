@@ -25,13 +25,9 @@ jobs:
           run_install: false
 
       - name: Install dependencies
-        run: |
-          cd my-qr
-          pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Deploy to Juno
-        run: |
-          cd my-qr
-          npx juno deploy
+        run: npx juno deploy
         env:
           JUNO_TOKEN: ${{ secrets.JUNO_TOKEN }}
