@@ -11,7 +11,20 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4  # ← ✅ path: src を削除
+        uses: actions/checkout@v4
+
+      - name: Debug - Check files
+        run: |
+          echo "Current directory: $(pwd)"
+          echo "Files in current directory:"
+          ls -la
+          echo "Checking for pnpm-lock.yaml:"
+          if [ -f pnpm-lock.yaml ]; then
+            echo "✅ pnpm-lock.yaml found"
+            ls -la pnpm-lock.yaml
+          else
+            echo "❌ pnpm-lock.yaml not found"
+          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -25,7 +38,15 @@ jobs:
           run_install: false
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: |
+          echo "Installing dependencies..."
+          if [ -f pnpm-lock.yaml ]; then
+            echo "Using frozen lockfile"
+            pnpm install --frozen-lockfile
+          else
+            echo "No lockfile found, installing without frozen lockfile"
+            pnpm install
+          fi
 
       - name: Deploy to Juno
         run: npx juno deploy
