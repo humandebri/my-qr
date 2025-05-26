@@ -1,5 +1,14 @@
+name: Deploy to Juno
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
 jobs:
   publish:
+    runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
         with:
