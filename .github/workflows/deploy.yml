@@ -24,12 +24,14 @@ jobs:
           version: 8
           run_install: false
 
-           - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-        working-directory: ./  # または削除
+      - name: Install dependencies
+        run: |
+          cd my-qr
+          pnpm install --frozen-lockfile
 
       - name: Deploy to Juno
-        run: npx juno deploy
-        working-directory: ./  # または削除
+        run: |
+          cd my-qr
+          npx juno deploy
         env:
           JUNO_TOKEN: ${{ secrets.JUNO_TOKEN }}
