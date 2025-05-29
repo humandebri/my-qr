@@ -22,6 +22,7 @@ export default function OwnerDashboard() {
     requiredStamps: 10,
     reward: '',
     expirationDays: 0, // 0は有効期限なし
+    pointsPerStamp: 10, // スタンプごとのポイント（デフォルト10）
   });
   const [autoStampSettings, setAutoStampSettings] = React.useState<{
     enabled: boolean;
@@ -384,6 +385,7 @@ export default function OwnerDashboard() {
       requiredStamps: 10,
       reward: '',
       expirationDays: 0,
+      pointsPerStamp: 10,
     });
   };
 
@@ -396,6 +398,7 @@ export default function OwnerDashboard() {
       requiredStamps: 10,
       reward: '',
       expirationDays: 0,
+      pointsPerStamp: 10,
     });
   };
 
@@ -409,6 +412,7 @@ export default function OwnerDashboard() {
         requiredStamps: formData.requiredStamps,
         reward: formData.reward,
         expirationDays: formData.expirationDays > 0 ? formData.expirationDays : undefined,
+        pointsPerStamp: formData.pointsPerStamp,
       });
       alert('スタンプカードが作成されました');
       closeCreateModal();
@@ -579,6 +583,12 @@ export default function OwnerDashboard() {
                     <span className="text-sm font-medium text-gray-700">特典</span>
                     <span className="text-sm font-semibold text-red-600 bg-red-50 px-2 py-1 rounded">{card.reward}</span>
                   </div>
+                  {card.pointsPerStamp && (
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="text-sm font-medium text-gray-700">獲得ポイント</span>
+                      <span className="text-sm font-semibold text-green-600 bg-green-50 px-2 py-1 rounded">{card.pointsPerStamp}ポイント/スタンプ</span>
+                    </div>
+                  )}
                   {card.expirationDays && (
                     <div className="flex justify-between items-center">
                       <span className="text-sm font-medium text-gray-700">有効期限</span>
@@ -809,6 +819,23 @@ export default function OwnerDashboard() {
                   placeholder="例: ラーメン1杯無料、ドリンク無料"
                   required
                 />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  スタンプごとのポイント <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="1000"
+                  value={formData.pointsPerStamp}
+                  onChange={(e) => setFormData({ ...formData, pointsPerStamp: parseInt(e.target.value) || 1 })}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-lavender-blue-500 focus:border-lavender-blue-500"
+                  placeholder="例: 10"
+                  required
+                />
+                <p className="text-xs text-gray-500 mt-1">お客様が1スタンプごとに獲得できるポイント数（1〜1000ポイント）</p>
               </div>
 
               <div>

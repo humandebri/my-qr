@@ -8,6 +8,7 @@ export interface StampCard {
   expiresAt?: number;
   expirationDays?: number; // 最初のスタンプからの有効日数
   shopOwner: string;
+  pointsPerStamp?: number; // スタンプごとに獲得できるポイント数
 }
 
 export interface UserStamp {
@@ -20,6 +21,7 @@ export interface UserStamp {
   createdAt: number;
   updatedAt: number;
   firstStampedAt?: number; // 最初のスタンプ時刻（有効期限計算用）
+  totalPointsEarned?: number; // 累計獲得ポイント
 }
 
 export interface StampHistory {
@@ -34,4 +36,11 @@ export interface StampHistory {
     autoStamp?: boolean;
     paymentReceiver?: string;
   };
+}
+
+export interface UserPoints {
+  id: string;
+  userId: string;
+  totalPoints: number;
+  lastUpdated: number;
 }
