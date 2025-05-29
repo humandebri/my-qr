@@ -2,6 +2,7 @@
 
 import { ReactNode, useEffect, useState, createContext, useContext } from "react";
 import { initSatellite, authSubscribe, type User } from "@junobuild/core";
+import { StampProvider } from "../components/context/StampContext";
 // import { AuthProvider } from "../components/context/Auth"; // AuthProviderができたら有効化
 // import { WorkerProvider } from "../components/context/Worker"; // WorkerProviderができたら有効化
 
@@ -50,10 +51,16 @@ export function ClientProviders({ children }: { children: ReactNode }) {
   //   </AuthProvider>
   // ) : null;
 
-  // AuthProviderでラップ
+  // AuthProviderとStampProviderでラップ
   return (
     <SatelliteReadyContext.Provider value={ready}>
-      {ready ? <AuthProvider>{children}</AuthProvider> : null}
+      {ready ? (
+        <AuthProvider>
+          <StampProvider>
+            {children}
+          </StampProvider>
+        </AuthProvider>
+      ) : null}
     </SatelliteReadyContext.Provider>
   );
 } 

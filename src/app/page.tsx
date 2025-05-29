@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback } from "react";
-import { signOut } from "@junobuild/core";
 import { useSatelliteReady, useAuth } from "../app/client-providers";
 import { useRouter } from "next/navigation";
 import QRCode from "qrcode";
@@ -17,6 +16,10 @@ import { principalToAccountIdentifierString } from "../utils/accountIdentifier";
 import { AiOutlineScan } from "react-icons/ai";
 import Image from "next/image";
 import { AUTH_CONFIG } from "../config/auth";
+import Link from "next/link";
+import { useStamp } from '@/components/context/StampContext';
+import { HiDownload } from "react-icons/hi";
+import { PiStampLight } from "react-icons/pi";
 
 // 型定義
 interface TransferOperation {
@@ -84,10 +87,37 @@ export default function Home() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const scannerRef = useRef<unknown>(null);
   const [scanTimeout, setScanTimeout] = useState<NodeJS.Timeout | null>(null);
+  
+  // トランザクションフィルタ用のstate
+  const [txFilter, setTxFilter] = useState<'all' | 'sent' | 'received'>('all');
+  const [filteredTransactions, setFilteredTransactions] = useState<Transaction[]>([]);
+  
+  // 自動スタンプ設定（localStorageから取得）
+  const [autoStampSettings, setAutoStampSettings] = useState<{
+    enabled: boolean;
+    selectedCardId: string | null;
+  }>({ enabled: false, selectedCardId: null });
+
+  // スタンプ機能を使用
+  const { addStamp, addAutoStamp } = useStamp();
 
   const isReady = useSatelliteReady();
   const { user, authLoaded } = useAuth();
   const router = useRouter();
+
+  // 自動スタンプ設定をlocalStorageから読み込み
+  useEffect(() => {
+    if (user) {
+      const saved = localStorage.getItem(`autoStamp_${user.key}`);
+      if (saved) {
+        try {
+          setAutoStampSettings(JSON.parse(saved));
+        } catch (e) {
+          console.warn('自動スタンプ設定の読み込みエラー:', e);
+        }
+      }
+    }
+  }, [user]);
 
   // ✅ videoの準備状態を厳密にチェックする共通関数
   const waitForVideoReady = async (videoEl: HTMLVideoElement): Promise<void> => {
@@ -221,6 +251,25 @@ export default function Home() {
     }
   }, [user?.owner]);
 
+  // トランザクションのフィルタリング
+  useEffect(() => {
+    if (!user?.owner) return;
+    
+    const userAccountId = principalToAccountIdentifierString(Principal.fromText(user.owner));
+    
+    const filtered = transactions.filter(tx => {
+      const direction = getTransactionDirection(tx.transaction, userAccountId);
+      
+      if (txFilter === 'all') return true;
+      if (txFilter === 'sent' && direction === 'Sent') return true;
+      if (txFilter === 'received' && direction === 'Received') return true;
+      
+      return false;
+    });
+    
+    setFilteredTransactions(filtered);
+  }, [transactions, txFilter, user?.owner]);
+
   // 日時変換関数
   const formatTimestamp = (timestampNanos: bigint) => {
     const date = new Date(Number(timestampNanos) / 1_000_000);
@@ -353,17 +402,13 @@ export default function Home() {
         console.log('✅ カメラ準備完了');
         
         // ★ 少し遅延してからQRスキャンを開始
-        setTimeout(() => {
-          if (scanModalOpen && videoRef.current) {
-            startQRScanning();
-          }
-        }, 100);
+        // startQRScanningは後で定義されるため、直接呼び出せない
       }
     } catch (err) {
       console.error('❌ カメラアクセスエラー:', err);
       alert('カメラにアクセスできませんでした。ブラウザの設定を確認してください。');
     }
-  }, [scanModalOpen]);
+  }, []);
 
   const startQRScanning = useCallback(async () => {
     if (!videoRef.current) {
@@ -389,7 +434,7 @@ export default function Home() {
       console.log('📹 video準備完了 - QrScanner初期化開始');
       const QrScanner = (await import('qr-scanner')).default;
       
-      const onDecode = (result: { data: string }) => {
+      const onDecode = async (result: { data: string }) => {
         console.log('🎉 QRコード検出成功:', result.data);
         setScanResult(result.data);
         
@@ -401,8 +446,30 @@ export default function Home() {
         }
         
         // スキャン結果の処理
-        let address = result.data;
-        console.log('📋 原アドレス:', address);
+        const scannedData = result.data;
+        console.log('📋 スキャン結果:', scannedData);
+        
+        // スタンプQRコードかどうかをチェック
+        if (scannedData.startsWith('stamp://')) {
+          // スタンプQRコードの処理
+          const stampId = scannedData.replace('stamp://', '');
+          console.log('🎯 スタンプID検出:', stampId);
+          
+          try {
+            await addStamp(stampId);
+            alert('スタンプを追加しました！');
+          } catch (err) {
+            console.error('スタンプ追加エラー:', err);
+            alert(err instanceof Error ? err.message : 'スタンプの追加に失敗しました');
+          }
+          
+          // スキャンモーダルを閉じる
+          handleScanClose();
+          return; // 送金処理をスキップ
+        }
+        
+        // 従来のプリンシパルアドレス処理
+        let address = scannedData;
         
         // icp://principal/ プレフィックスを削除
         if (address.startsWith('icp://principal/')) {
@@ -518,7 +585,7 @@ export default function Home() {
       
       alert(`${userFriendlyMessage}\n\n技術的詳細: ${errorMessage}`);
     }
-  }, [scanModalOpen, scanResult, scanTimeout, handleScanClose]);
+  }, [scanModalOpen, scanResult, scanTimeout, handleScanClose, addStamp]);
 
   // サインインしていなければ/loginへリダイレクト
   useEffect(() => {
@@ -583,9 +650,16 @@ export default function Home() {
   // スキャンモーダルが開いたときにカメラを開始
   useEffect(() => {
     if (scanModalOpen) {
-      startCamera();
+      startCamera().then(() => {
+        // カメラ起動後にQRスキャンを開始
+        setTimeout(() => {
+          if (scanModalOpen && videoRef.current) {
+            startQRScanning();
+          }
+        }, 100);
+      });
     }
-  }, [scanModalOpen, startCamera]);
+  }, [scanModalOpen, startCamera, startQRScanning]);
 
   // ✅ タブ復帰時の再スキャン強制開始
   useEffect(() => {
@@ -613,11 +687,6 @@ export default function Home() {
     return null;
   }
 
-  // ログアウト処理
-  const handleLogout = async () => {
-    await signOut();
-    router.push("/login");
-  };
 
   const handleCopy = async () => {
     if (user?.owner) {
@@ -692,6 +761,18 @@ export default function Home() {
 
       if ('Ok' in result) {
         setSendSuccess(`送金が完了しました！ブロック番号: ${result.Ok.toString()}`);
+        
+        // 自動スタンプ機能：支払いが成功した場合のみスタンプを押す
+        if (autoStampSettings.enabled && autoStampSettings.selectedCardId) {
+          try {
+            await addAutoStamp(toAddress, autoStampSettings.selectedCardId);
+            console.log('🎯 自動スタンプが押されました');
+          } catch (stampError) {
+            console.warn('自動スタンプエラー:', stampError);
+            // スタンプエラーは支払い成功には影響しない
+          }
+        }
+        
         setToAddress("");
         setAmount("");
         // 残高を更新
@@ -728,18 +809,18 @@ export default function Home() {
     setScanModalOpen(true);
   };
 
+  const handleDownloadQR = () => {
+    if (qrUrl && user?.owner) {
+      const link = document.createElement('a');
+      link.download = `wallet-qr-${user.owner.slice(0, 8)}.png`;
+      link.href = qrUrl;
+      link.click();
+    }
+  };
+
   // ログイン済みの場合のみUIを表示
   return (
-    <main >
-      <div className="flex justify-end pt-4 pr-4">
-        <button
-          onClick={handleLogout}
-          className="border p-2 rounded flex items-center   hover:bg-gray-600"
-          aria-label="logout"
-        >
-          logout
-        </button>
-      </div>
+    <main>
       <div className="m-4">
 
         {/* プリンシパルアドレス表示とコピー・QRコード */}
@@ -780,30 +861,37 @@ export default function Home() {
               <p >QR Code</p>
             </div>
             {qrUrl && (
-              <div className="flex items-center gap-4">
+              <div className="grid grid-cols-2 gap-4 items-center">
                 <button
                   type="button"
                   onClick={() => setModalOpen(true)}
                   className="focus:outline-none"
                   aria-label="QRコードを拡大"
                 >
-                  <Image src={qrUrl} alt="Principal QR" width={128} height={128} className="w-32 h-32 border rounded block mx-auto" />
+                  <Image src={qrUrl} alt="Principal QR" width={128} height={128} className="w-full max-w-[128px] h-auto border rounded block" />
                 </button>
-                <div className="flex  gap-2 ">
+                <div className="flex flex-col gap-2">
                   <button 
                     onClick={handleSend}
-                    className="px-4 py-2 bg-lavender-blue-300 rounded hover:bg-lavender-blue-400 font-thin text-sm flex items-center gap-1"
+                    className="px-4 py-2 bg-lavender-blue-300 rounded hover:bg-lavender-blue-400 font-thin text-sm flex items-center gap-1 justify-center"
                   >
                     <IoIosSend />
                     Send
                   </button>
                   <button 
                     onClick={handleScan}
-                    className="px-4 py-2 bg-lavender-blue-300 rounded hover:bg-lavender-blue-400 font-thin text-sm flex items-center gap-1"
+                    className="px-4 py-2 bg-lavender-blue-300 rounded hover:bg-lavender-blue-400 font-thin text-sm flex items-center gap-1 justify-center"
                   >
                     <AiOutlineScan />
                     Scan
                   </button>
+                  <Link 
+                    href="/stamps"
+                    className="px-4 py-2 bg-lavender-blue-300 rounded hover:bg-lavender-blue-400 font-thin text-sm flex items-center gap-1 justify-center"
+                  >
+                    <PiStampLight className="w-5 h-5" />
+                    Stamps
+                  </Link>
                 </div>
               </div>
             )}
@@ -812,12 +900,21 @@ export default function Home() {
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50" style={{backdropFilter: 'blur(2px)'}}>
                 <div ref={modalRef} className="bg-white p-6 rounded shadow-lg flex flex-col items-center">
                   <Image src={qrUrl!} alt="Principal QR Large" width={288} height={288} className="w-72 h-72 border rounded mb-4" />
-                  <button
-                    onClick={() => setModalOpen(false)}
-                    className=" px-4  rounded hover:bg-blue-600 text-black"
-                  >
-                    X Close
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleDownloadQR}
+                      className="px-4 py-2 bg-lavender-blue-500 text-white rounded hover:bg-lavender-blue-600 flex items-center gap-2"
+                    >
+                      <HiDownload className="w-5 h-5" />
+                      Download
+                    </button>
+                    <button
+                      onClick={() => setModalOpen(false)}
+                      className="px-4 py-2 border border-gray-300 rounded hover:bg-gray-100 text-black"
+                    >
+                      Close
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -825,8 +922,8 @@ export default function Home() {
         )}
 
         <div className="flex flex-col gap-2 p-5 mt-2 rounded-lg bg-gray-300 text-white">
-          <div className="flex items-center justify-between">
-            <p>Transactions</p>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-gray-700 font-semibold">Transactions</p>
             <button 
               onClick={fetchTransactions}
               className="px-3 py-1  text-gray-700 hover:bg-gray-100 rounded text-sm"
@@ -837,9 +934,43 @@ export default function Home() {
             </button>
           </div>
           
+          {/* フィルターボタン */}
+          <div className="flex gap-2 mb-2">
+            <button
+              onClick={() => setTxFilter('all')}
+              className={`px-3 py-1 rounded text-sm ${
+                txFilter === 'all'
+                  ? 'bg-lavender-blue-500 text-white'
+                  : 'bg-white text-gray-700 hover:bg-gray-100'
+              }`}
+            >
+              All ({transactions.length})
+            </button>
+            <button
+              onClick={() => setTxFilter('received')}
+              className={`px-3 py-1 rounded text-sm ${
+                txFilter === 'received'
+                  ? 'bg-lavender-blue-500 text-white'
+                  : 'bg-white text-gray-700 hover:bg-gray-100'
+              }`}
+            >
+              Received
+            </button>
+            <button
+              onClick={() => setTxFilter('sent')}
+              className={`px-3 py-1 rounded text-sm ${
+                txFilter === 'sent'
+                  ? 'bg-lavender-blue-500 text-white'
+                  : 'bg-white text-gray-700 hover:bg-gray-100'
+              }`}
+            >
+              Sent
+            </button>
+          </div>
+          
           {transactionsLoading ? (
             <p className="text-center py-4">読み込み中...</p>
-          ) : transactions.length > 0 ? (
+          ) : filteredTransactions.length > 0 ? (
             <div className="overflow-x-auto">
               {/* PC版テーブル */}
               <table className="w-full text-sm hidden md:table">
@@ -854,7 +985,7 @@ export default function Home() {
                   </tr>
                 </thead>
                 <tbody>
-                  {transactions.map((tx) => {
+                  {filteredTransactions.map((tx) => {
                     const userAccountId = user?.owner ? principalToAccountIdentifierString(Principal.fromText(user.owner)) : '';
                     const direction = getTransactionDirection(tx.transaction, userAccountId);
                     const operation = tx.transaction.operation;
@@ -896,7 +1027,7 @@ export default function Home() {
                   </tr>
                 </thead>
                 <tbody>
-                  {transactions.map((tx) => {
+                  {filteredTransactions.map((tx) => {
                     const operation = tx.transaction.operation;
                     
                     return (
@@ -917,7 +1048,11 @@ export default function Home() {
               </table>
             </div>
           ) : (
-            <p className="text-center py-4">トランザクションがありません</p>
+            <p className="text-center py-4 text-gray-600">
+              {txFilter === 'all' 
+                ? 'トランザクションがありません' 
+                : `${txFilter === 'sent' ? '送金' : '受取'}履歴はありません`}
+            </p>
           )}
         </div>
       </div>
