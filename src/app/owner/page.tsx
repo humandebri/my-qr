@@ -5,7 +5,7 @@ import { useAuth } from '@/app/client-providers';
 import { useRouter } from 'next/navigation';
 import { useStamp } from '@/components/context/StampContext';
 import { DownloadableQRCode } from '@/components/DownloadableQRCode';
-import { Html5Qrcode } from 'html5-qrcode';
+// QRスキャナーはqr-scannerライブラリを動的インポートで使用
 
 export default function OwnerDashboard() {
   const { user } = useAuth();
@@ -21,6 +21,7 @@ export default function OwnerDashboard() {
     description: '',
     requiredStamps: 10,
     reward: '',
+    expirationDays: 0, // 0は有効期限なし
   });
   const [autoStampSettings, setAutoStampSettings] = React.useState<{
     enabled: boolean;
@@ -50,7 +51,12 @@ export default function OwnerDashboard() {
       localStorage.setItem(`autoStamp_${user.key}`, JSON.stringify(autoStampSettings));
     }
   }, [autoStampSettings, user]);
-  const scannerRef = React.useRef<Html5Qrcode | null>(null);
+  
+  const scannerRef = React.useRef<unknown>(null);
+  const videoRef = React.useRef<HTMLVideoElement>(null);
+  const [isProcessing, setIsProcessing] = React.useState(false);
+  const [lastScannedCode, setLastScannedCode] = React.useState<string | null>(null);
+  const lastScannedTimeRef = React.useRef<number>(0);
 
   // オーナーが所有するスタンプカードのみフィルタリング
   const myStampCards = React.useMemo(() => {
@@ -64,45 +70,40 @@ export default function OwnerDashboard() {
     }
   }, [user, loading, router]);
 
-  // QRスキャナーの開始
-  const startScanning = async () => {
-    try {
-      setScanModalOpen(true);
-      const scanner = new Html5Qrcode("reader");
-      scannerRef.current = scanner;
-      
-      await scanner.start(
-        { facingMode: "environment" },
-        {
-          fps: 10,
-          qrbox: { width: 250, height: 250 }
-        },
-        (decodedText) => {
-          handleScanResult(decodedText);
-        },
-        () => {
-          // エラーは無視（継続的にスキャン）
-        }
-      );
-    } catch (error) {
-      console.error('QRスキャナー開始エラー:', error);
-      alert('カメラにアクセスできませんでした');
-      setScanModalOpen(false);
-    }
-  };
-
   // QRスキャン結果の処理
-  const handleScanResult = async (decodedText: string) => {
+  const handleScanResult = React.useCallback(async (decodedText: string) => {
+    const currentTime = Date.now();
+    
+    // 処理中または同じコードを2秒以内に再スキャンした場合は無視
+    if (isProcessing) {
+      console.log('⏳ 処理中のため無視');
+      return;
+    }
+    
+    if (lastScannedCode === decodedText && 
+        currentTime - lastScannedTimeRef.current < 2000) {
+      console.log('🔄 同じコードの連続スキャンを無視');
+      return;
+    }
+    
+    setIsProcessing(true);
+    setLastScannedCode(decodedText);
+    lastScannedTimeRef.current = currentTime;
     
     // スキャナーを停止
     if (scannerRef.current) {
-      await scannerRef.current.stop();
+      try {
+        (scannerRef.current as { stop: () => void }).stop();
+      } catch (e) {
+        console.warn('スキャナー停止時のエラー:', e);
+      }
       scannerRef.current = null;
     }
     setScanModalOpen(false);
 
-    // claim://cardId/userId の形式をパース
+    // QRコードの種類を判定
     if (decodedText.startsWith('claim://')) {
+      // claim://cardId/userId の形式をパース
       const parts = decodedText.replace('claim://', '').split('/');
       if (parts.length === 2) {
         const [cardId] = parts;
@@ -112,30 +113,237 @@ export default function OwnerDashboard() {
         if (card) {
           try {
             await claimReward(cardId);
-            alert(`特典を受け渡しました！\n店舗: ${card.shopName}\n特典: ${card.reward}`);
+            alert(`✅ 特典を受け渡しました！\n\n店舗: ${card.shopName}\n特典: ${card.reward}\n\nお客様にお渡しください。`);
           } catch (error) {
             console.error('特典受け渡しエラー:', error);
             alert('特典の受け渡しに失敗しました');
           }
         } else {
-          alert('このカードの特典は受け渡しできません');
+          alert('⚠️ このカードの特典は受け渡しできません\n\n他の店舗のスタンプカードです。');
         }
       } else {
         alert('無効なQRコードです');
       }
+    } else if (decodedText.startsWith('stamp://')) {
+      // スタンプ用QRコードの場合
+      const stampId = decodedText.replace('stamp://', '');
+      const card = myStampCards.find(c => c.id === stampId);
+      if (card) {
+        alert(`ℹ️ これはスタンプ用のQRコードです\n\n店舗: ${card.shopName}\n\nこのQRコードはお客様がスタンプを押すために使用します。\n特典受け取りには、お客様のスタンプカードから「特典受け取り用QRコード」を表示してもらってください。`);
+      } else {
+        alert('ℹ️ これはスタンプ用のQRコードです\n\n特典受け取りには、お客様のスタンプカードから「特典受け取り用QRコード」を表示してもらってください。');
+      }
     } else {
-      alert('特典受け取り用のQRコードではありません');
+      alert('⚠️ 認識できないQRコードです\n\n特典受け取りには、お客様のスタンプカードから「特典受け取り用QRコード」を表示してもらってください。');
     }
+    
+    // 処理完了後にフラグをリセット
+    setIsProcessing(false);
+  }, [myStampCards, claimReward, isProcessing, lastScannedCode]);
+
+  // カメラ開始関数
+  const startCamera = React.useCallback(async () => {
+    try {
+      console.log('🎥 カメラ開始中...');
+      
+      // 既存のストリームがあれば停止
+      if (videoRef.current && videoRef.current.srcObject) {
+        const stream = videoRef.current.srcObject as MediaStream;
+        stream.getTracks().forEach(track => track.stop());
+        videoRef.current.srcObject = null;
+      }
+      
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { 
+          facingMode: 'environment',
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        }
+      });
+      
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        
+        // videoのloadedmetadataイベントを待つ
+        await new Promise<void>((resolve) => {
+          const checkReady = () => {
+            if (
+              videoRef.current &&
+              videoRef.current.readyState >= 3 &&
+              videoRef.current.videoWidth > 0 &&
+              videoRef.current.videoHeight > 0
+            ) {
+              console.log('📐 video完全準備完了');
+              resolve();
+            } else {
+              requestAnimationFrame(checkReady);
+            }
+          };
+          checkReady();
+        });
+        
+        await videoRef.current.play();
+        console.log('✅ カメラ準備完了');
+      }
+    } catch (err) {
+      console.error('❌ カメラアクセスエラー:', err);
+      alert('カメラにアクセスできませんでした。ブラウザの設定を確認してください。');
+    }
+  }, []);
+
+  // QRスキャナーの開始
+  const startQRScanning = React.useCallback(async () => {
+    if (!videoRef.current) {
+      console.warn('⚠️ videoRef.currentが存在しません');
+      return;
+    }
+    
+    if (scannerRef.current) {
+      try {
+        (scannerRef.current as { stop: () => void }).stop();
+      } catch (e) {
+        console.warn('既存スキャナー停止時のエラー:', e);
+      }
+      scannerRef.current = null;
+    }
+    
+    try {
+      console.log('🔍 QRスキャナー初期化中...');
+      
+      const QrScanner = (await import('qr-scanner')).default;
+      
+      const onDecode = async (result: { data: string }) => {
+        console.log('🎉 QRコード検出成功:', result.data);
+        handleScanResult(result.data);
+      };
+      
+      // QrScanner初期化
+      const scanner = new QrScanner(
+        videoRef.current,
+        onDecode,
+        {
+          onDecodeError: (error: unknown) => {
+            // エラーログは最小限に
+            if (process.env.NODE_ENV === 'development') {
+              console.debug('QR decode error:', error);
+            }
+          },
+          preferredCamera: 'environment',
+          highlightScanRegion: true,
+          highlightCodeOutline: true,
+          maxScansPerSecond: 5,
+          returnDetailedScanResult: true
+        }
+      );
+      
+      scannerRef.current = scanner;
+      
+      // スキャナー開始
+      await scanner.start();
+      console.log('✅ QRスキャナー開始成功');
+      
+      // ✅ ハイライト描画を強制更新
+      requestAnimationFrame(() => {
+        window.dispatchEvent(new Event('resize'));
+      });
+      
+      // ✅ シンプルなフォールバック：1回だけ再試行
+      setTimeout(async () => {
+        // スキャンが成功していない場合のみ1回だけ再試行
+        if (scanModalOpen && scannerRef.current) {
+          try {
+            console.log('🔄 スキャナー軽量再起動を実行');
+            await (scannerRef.current as { stop: () => Promise<void>; start: () => Promise<void> }).stop();
+            await (scannerRef.current as { stop: () => Promise<void>; start: () => Promise<void> }).start();
+            window.dispatchEvent(new Event('resize'));
+            console.log('✅ フォールバック再起動完了');
+          } catch (e) {
+            console.warn('フォールバック再起動失敗:', e);
+          }
+        }
+      }, 1200); // 1.2秒後に1回だけ
+      
+    } catch (err) {
+      console.error('❌ QRスキャナーエラー:', err);
+      alert('QRスキャナーの初期化に失敗しました');
+    }
+  }, [handleScanResult, scanModalOpen]);
+
+  // スキャンモーダルを開く
+  const startScanning = async () => {
+    setScanModalOpen(true);
   };
 
   // スキャナーを停止
-  const stopScanning = async () => {
+  const stopScanning = React.useCallback(() => {
+    console.log('🚪 stopScanning開始');
+    setScanModalOpen(false);
+    setIsProcessing(false);
+    setLastScannedCode(null);
+    
+    // QRスキャナーを停止
     if (scannerRef.current) {
-      await scannerRef.current.stop();
+      try {
+        (scannerRef.current as { stop: () => void; destroy?: () => void; _destroyed?: boolean }).stop();
+        console.log('🛑 QRスキャナー停止完了');
+      } catch (e) {
+        console.warn('QRスキャナー停止時のエラー:', e);
+      }
       scannerRef.current = null;
     }
-    setScanModalOpen(false);
-  };
+    
+    // カメラストリームを停止
+    try {
+      if (videoRef.current?.srcObject) {
+        const stream = videoRef.current.srcObject as MediaStream;
+        if (stream && typeof stream.getTracks === 'function') {
+          stream.getTracks().forEach(track => {
+            if (track && typeof track.stop === 'function') {
+              track.stop();
+            }
+          });
+        }
+        videoRef.current.srcObject = null;
+        console.log('📹 カメラストリーム停止完了');
+      }
+    } catch (e) {
+      console.warn('カメラストリーム停止エラー:', e);
+    }
+    
+    console.log('✅ stopScanning完了');
+  }, []);
+
+  // スキャンモーダルが開いたときにカメラとQRスキャンを開始
+  React.useEffect(() => {
+    if (scanModalOpen) {
+      startCamera().then(() => {
+        // カメラ起動後にQRスキャンを開始
+        setTimeout(() => {
+          if (scanModalOpen && videoRef.current) {
+            startQRScanning();
+          }
+        }, 100);
+      });
+    }
+  }, [scanModalOpen, startCamera, startQRScanning]);
+
+  // ✅ タブ復帰時の再スキャン強制開始
+  React.useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && scanModalOpen && videoRef.current) {
+        console.log('👀 タブ復帰 → 再スキャン強制開始');
+        // 少し遅延してからスキャンを再開始
+        setTimeout(() => {
+          if (scanModalOpen && videoRef.current) {
+            startQRScanning();
+          }
+        }, 500);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [scanModalOpen, startQRScanning]);
 
   // 削除モーダルを開く
   const openDeleteModal = (cardId: string) => {
@@ -175,6 +383,7 @@ export default function OwnerDashboard() {
       description: '',
       requiredStamps: 10,
       reward: '',
+      expirationDays: 0,
     });
   };
 
@@ -186,6 +395,7 @@ export default function OwnerDashboard() {
       description: '',
       requiredStamps: 10,
       reward: '',
+      expirationDays: 0,
     });
   };
 
@@ -198,6 +408,7 @@ export default function OwnerDashboard() {
         description: formData.description,
         requiredStamps: formData.requiredStamps,
         reward: formData.reward,
+        expirationDays: formData.expirationDays > 0 ? formData.expirationDays : undefined,
       });
       alert('スタンプカードが作成されました');
       closeCreateModal();
@@ -259,7 +470,7 @@ export default function OwnerDashboard() {
               </div>
               <div>
                 <h3 className="text-xl font-bold text-gray-800">支払い受け取り時の自動スタンプ設定</h3>
-                <p className="text-sm text-gray-600">お客様からの支払いを受け取った時に自動でスタンプを押します</p>
+                <p className="text-sm text-gray-600">お客様からの支払いをこのアプリで受け取った時に自動でスタンプを押します</p>
               </div>
             </div>
 
@@ -364,10 +575,16 @@ export default function OwnerDashboard() {
                     <span className="text-sm font-medium text-gray-700">必要スタンプ数</span>
                     <span className="text-lg font-bold text-lavender-blue-600">{card.requiredStamps}個</span>
                   </div>
-                  <div className="flex justify-between items-center">
+                  <div className="flex justify-between items-center mb-2">
                     <span className="text-sm font-medium text-gray-700">特典</span>
                     <span className="text-sm font-semibold text-red-600 bg-red-50 px-2 py-1 rounded">{card.reward}</span>
                   </div>
+                  {card.expirationDays && (
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm font-medium text-gray-700">有効期限</span>
+                      <span className="text-sm text-gray-600">最初のスタンプから{card.expirationDays}日間</span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="border-t border-lavender-blue-100 pt-6">
@@ -418,11 +635,29 @@ export default function OwnerDashboard() {
               </button>
             </div>
             
-            <div id="reader" className="w-full rounded-lg overflow-hidden border-2 border-lavender-blue-200"></div>
+            <div className="relative bg-black rounded overflow-hidden">
+              <video
+                ref={videoRef}
+                className="w-full h-64 object-cover"
+                playsInline
+                muted
+                autoPlay
+              />
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div className="w-48 h-48 border-4 border-green-400 rounded-lg animate-pulse"></div>
+              </div>
+            </div>
             
-            <div className="mt-6 p-4 bg-green-50 rounded-lg">
-              <p className="text-sm text-green-700 text-center font-medium">
-                💎 お客様の特典受け取り用QRコードをカメラに向けてください
+            <div className="mt-4 space-y-2">
+              <p className="text-center text-sm text-gray-600">
+                💎 お客様のスタンプカードから表示される<br />
+                <strong>「特典受け取り用QRコード」</strong>を緑の枠内に合わせてください
+              </p>
+              <p className="text-center text-xs text-gray-500">
+                📱 カメラが暗い場合は照明を当ててください
+              </p>
+              <p className="text-center text-xs text-gray-500">
+                🔄 動作しない場合はページを再読み込みしてください
               </p>
             </div>
           </div>
@@ -549,16 +784,17 @@ export default function OwnerDashboard() {
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   必要スタンプ数 <span className="text-red-500">*</span>
                 </label>
-                <select
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
                   value={formData.requiredStamps}
-                  onChange={(e) => setFormData({ ...formData, requiredStamps: parseInt(e.target.value) })}
+                  onChange={(e) => setFormData({ ...formData, requiredStamps: parseInt(e.target.value) || 1 })}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-lavender-blue-500 focus:border-lavender-blue-500"
-                >
-                  {[5, 6, 7, 8, 9, 10, 11, 12, 15, 20].map(num => (
-                    <option key={num} value={num}>{num}個</option>
-                  ))}
-                </select>
-                <p className="text-xs text-gray-500 mt-1">お客様が特典を受け取るのに必要なスタンプ数</p>
+                  placeholder="例: 10"
+                  required
+                />
+                <p className="text-xs text-gray-500 mt-1">お客様が特典を受け取るのに必要なスタンプ数（1〜100個）</p>
               </div>
 
               <div>
@@ -573,6 +809,27 @@ export default function OwnerDashboard() {
                   placeholder="例: ラーメン1杯無料、ドリンク無料"
                   required
                 />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  有効期限
+                </label>
+                <select
+                  value={formData.expirationDays}
+                  onChange={(e) => setFormData({ ...formData, expirationDays: parseInt(e.target.value) })}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-lavender-blue-500 focus:border-lavender-blue-500"
+                >
+                  <option value={0}>無期限</option>
+                  <option value={7}>1週間</option>
+                  <option value={14}>2週間</option>
+                  <option value={30}>1ヶ月</option>
+                  <option value={60}>2ヶ月</option>
+                  <option value={90}>3ヶ月</option>
+                  <option value={180}>6ヶ月</option>
+                  <option value={365}>1年</option>
+                </select>
+                <p className="text-xs text-gray-500 mt-1">最初のスタンプから計算されます</p>
               </div>
 
               <div className="flex gap-3 pt-4">

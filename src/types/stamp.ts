@@ -6,6 +6,7 @@ export interface StampCard {
   reward: string;
   createdAt: number;
   expiresAt?: number;
+  expirationDays?: number; // 最初のスタンプからの有効日数
   shopOwner: string;
 }
 
@@ -18,6 +19,7 @@ export interface UserStamp {
   completedCount: number;
   createdAt: number;
   updatedAt: number;
+  firstStampedAt?: number; // 最初のスタンプ時刻（有効期限計算用）
 }
 
 export interface StampHistory {

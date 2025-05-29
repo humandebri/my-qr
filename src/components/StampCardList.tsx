@@ -9,6 +9,24 @@ export const StampCardList: React.FC = () => {
   const { stampCards, userStamps, loading, error, claimReward } = useStamp();
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'active' | 'completed'>('all');
+  
+  // カウント計算
+  const counts = useMemo(() => {
+    let active = 0;
+    let completed = 0;
+    
+    stampCards.forEach(card => {
+      const userStamp = userStamps.find(s => s.cardId === card.id);
+      const hasCompletedBefore = userStamp ? userStamp.completedCount > 0 : false;
+      const isCurrentlyComplete = userStamp ? userStamp.stampCount >= card.requiredStamps : false;
+      const isActive = userStamp ? userStamp.stampCount > 0 && !isCurrentlyComplete : false;
+      
+      if (isActive || (!hasCompletedBefore && userStamp?.stampCount === 0)) active++;
+      if (hasCompletedBefore || isCurrentlyComplete) completed++;
+    });
+    
+    return { all: stampCards.length, active, completed };
+  }, [stampCards, userStamps]);
 
   // フィルタリングされたスタンプカード
   const filteredCards = useMemo(() => {
@@ -20,12 +38,13 @@ export const StampCardList: React.FC = () => {
       
       // フィルター条件
       const userStamp = userStamps.find(s => s.cardId === card.id);
-      const isCompleted = userStamp ? userStamp.stampCount >= card.requiredStamps : false;
-      const isActive = userStamp ? userStamp.stampCount > 0 && !isCompleted : false;
+      const hasCompletedBefore = userStamp ? userStamp.completedCount > 0 : false;
+      const isCurrentlyComplete = userStamp ? userStamp.stampCount >= card.requiredStamps : false;
+      const isActive = userStamp ? userStamp.stampCount > 0 && !isCurrentlyComplete : false;
       
       let matchesFilter = true;
-      if (filterType === 'active') matchesFilter = isActive;
-      if (filterType === 'completed') matchesFilter = isCompleted;
+      if (filterType === 'active') matchesFilter = isActive || (!hasCompletedBefore && userStamp?.stampCount === 0);
+      if (filterType === 'completed') matchesFilter = hasCompletedBefore || isCurrentlyComplete;
       
       return matchesSearch && matchesFilter;
     });
@@ -59,7 +78,9 @@ export const StampCardList: React.FC = () => {
   const handleClaimReward = async (cardId: string) => {
     try {
       await claimReward(cardId);
-      alert('特典を受け取りました！');
+      alert('特典を受け取りました！\n\n再度スタンプを集めることができます。');
+      // 達成済みタブに自動的に切り替え
+      setFilterType('completed');
     } catch (err) {
       console.error('Failed to claim reward:', err);
       alert(err instanceof Error ? err.message : '特典の受け取りに失敗しました');
@@ -90,7 +111,7 @@ export const StampCardList: React.FC = () => {
                 : 'bg-white text-gray-700 hover:bg-gray-100'
             }`}
           >
-            すべて ({stampCards.length})
+            すべて ({counts.all})
           </button>
           <button
             onClick={() => setFilterType('active')}
@@ -100,7 +121,7 @@ export const StampCardList: React.FC = () => {
                 : 'bg-white text-gray-700 hover:bg-gray-100'
             }`}
           >
-            進行中
+            進行中 ({counts.active})
           </button>
           <button
             onClick={() => setFilterType('completed')}
@@ -110,7 +131,7 @@ export const StampCardList: React.FC = () => {
                 : 'bg-white text-gray-700 hover:bg-gray-100'
             }`}
           >
-            達成済み
+            達成済み ({counts.completed})
           </button>
         </div>
       </div>

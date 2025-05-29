@@ -20,6 +20,7 @@ import Link from "next/link";
 import { useStamp } from '@/components/context/StampContext';
 import { HiDownload } from "react-icons/hi";
 import { PiStampLight } from "react-icons/pi";
+import { CelebrationAnimation } from '@/components/CelebrationAnimation';
 
 // 型定義
 interface TransferOperation {
@@ -87,6 +88,9 @@ export default function Home() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const scannerRef = useRef<unknown>(null);
   const [scanTimeout, setScanTimeout] = useState<NodeJS.Timeout | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [lastScannedCode, setLastScannedCode] = useState<string | null>(null);
+  const lastScannedTimeRef = useRef<number>(0);
   
   // トランザクションフィルタ用のstate
   const [txFilter, setTxFilter] = useState<'all' | 'sent' | 'received'>('all');
@@ -100,6 +104,17 @@ export default function Home() {
 
   // スタンプ機能を使用
   const { addStamp, addAutoStamp } = useStamp();
+  
+  // お祝いアニメーション用のstate
+  const [celebration, setCelebration] = useState<{
+    isVisible: boolean;
+    shopName: string;
+    reward: string;
+  }>({
+    isVisible: false,
+    shopName: '',
+    reward: '',
+  });
 
   const isReady = useSatelliteReady();
   const { user, authLoaded } = useAuth();
@@ -108,13 +123,24 @@ export default function Home() {
   // 自動スタンプ設定をlocalStorageから読み込み
   useEffect(() => {
     if (user) {
-      const saved = localStorage.getItem(`autoStamp_${user.key}`);
-      if (saved) {
-        try {
-          setAutoStampSettings(JSON.parse(saved));
-        } catch (e) {
-          console.warn('自動スタンプ設定の読み込みエラー:', e);
+      try {
+        const saved = localStorage.getItem(`autoStamp_${user.key}`);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          // データ形式を検証
+          if (parsed && typeof parsed.enabled === 'boolean' && 
+              (parsed.selectedCardId === null || typeof parsed.selectedCardId === 'string')) {
+            setAutoStampSettings(parsed);
+          } else {
+            console.warn('無効な自動スタンプ設定データ、デフォルトに戻します');
+            localStorage.removeItem(`autoStamp_${user.key}`);
+          }
         }
+      } catch (e) {
+        console.warn('自動スタンプ設定の読み込みエラー:', e);
+        // 破損したデータを削除
+        localStorage.removeItem(`autoStamp_${user.key}`);
+        setAutoStampSettings({ enabled: false, selectedCardId: null });
       }
     }
   }, [user]);
@@ -338,6 +364,8 @@ export default function Home() {
     console.log('🚪 handleScanClose開始');
     setScanModalOpen(false);
     setScanResult(null);
+    setIsProcessing(false);
+    setLastScannedCode(null);
     
     // タイムアウトをクリア
     if (scanTimeout) {
@@ -362,12 +390,22 @@ export default function Home() {
       scannerRef.current = null;
     }
     
-    // カメラストリームを停止
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach(track => track.stop());
-      videoRef.current.srcObject = null;
-      console.log('📹 カメラストリーム停止完了');
+    // カメラストリームを停止（安全にチェック）
+    try {
+      if (videoRef.current?.srcObject) {
+        const stream = videoRef.current.srcObject as MediaStream;
+        if (stream && typeof stream.getTracks === 'function') {
+          stream.getTracks().forEach(track => {
+            if (track && typeof track.stop === 'function') {
+              track.stop();
+            }
+          });
+        }
+        videoRef.current.srcObject = null;
+        console.log('📹 カメラストリーム停止完了');
+      }
+    } catch (e) {
+      console.warn('カメラストリーム停止エラー:', e);
     }
     
     console.log('✅ handleScanClose完了');
@@ -435,8 +473,36 @@ export default function Home() {
       const QrScanner = (await import('qr-scanner')).default;
       
       const onDecode = async (result: { data: string }) => {
-        console.log('🎉 QRコード検出成功:', result.data);
-        setScanResult(result.data);
+        const scannedData = result.data;
+        const currentTime = Date.now();
+        
+        // 処理中または同じコードを2秒以内に再スキャンした場合は無視
+        if (isProcessing) {
+          console.log('⏳ 処理中のため無視');
+          return;
+        }
+        
+        if (lastScannedCode === scannedData && 
+            currentTime - lastScannedTimeRef.current < 2000) {
+          console.log('🔄 同じコードの連続スキャンを無視');
+          return;
+        }
+        
+        console.log('🎉 QRコード検出成功:', scannedData);
+        setScanResult(scannedData);
+        setIsProcessing(true);
+        setLastScannedCode(scannedData);
+        lastScannedTimeRef.current = currentTime;
+        
+        // スキャナーを即座に停止
+        if (scannerRef.current) {
+          try {
+            (scannerRef.current as { stop: () => void }).stop();
+            console.log('⏹️ スキャナー即時停止');
+          } catch (e) {
+            console.warn('スキャナー停止エラー:', e);
+          }
+        }
         
         // スキャン成功時はタイムアウトをクリア
         if (scanTimeout) {
@@ -445,8 +511,6 @@ export default function Home() {
           console.log('⏰ タイムアウトクリア完了');
         }
         
-        // スキャン結果の処理
-        const scannedData = result.data;
         console.log('📋 スキャン結果:', scannedData);
         
         // スタンプQRコードかどうかをチェック
@@ -456,8 +520,19 @@ export default function Home() {
           console.log('🎯 スタンプID検出:', stampId);
           
           try {
-            await addStamp(stampId);
-            alert('スタンプを追加しました！');
+            const result = await addStamp(stampId);
+            
+            if (result.isComplete) {
+              // 条件達成！お祝いアニメーションを表示
+              setCelebration({
+                isVisible: true,
+                shopName: result.shopName,
+                reward: result.reward,
+              });
+            } else {
+              // 通常のスタンプ追加
+              alert('スタンプを追加しました！');
+            }
           } catch (err) {
             console.error('スタンプ追加エラー:', err);
             alert(err instanceof Error ? err.message : 'スタンプの追加に失敗しました');
@@ -476,17 +551,6 @@ export default function Home() {
           address = address.replace('icp://principal/', '');
           console.log('🔧 プレフィックス削除後:', address);
         }
-        
-        // スキャン成功後の処理（軽量なstopのみ）
-        try {
-          (scannerRef.current as { stop: () => void }).stop();
-          console.log('⏹️ スキャナー停止完了');
-          // destroyはリソース節約のため省略
-        } catch (e) {
-          console.warn('スキャナー停止時のエラー:', e);
-        }
-        scannerRef.current = null;
-        console.log('🗑️ スキャナーstate更新完了');
         
         // 送金先アドレスに設定
         console.log('💰 送金先アドレス設定中:', address);
@@ -585,7 +649,7 @@ export default function Home() {
       
       alert(`${userFriendlyMessage}\n\n技術的詳細: ${errorMessage}`);
     }
-  }, [scanModalOpen, scanResult, scanTimeout, handleScanClose, addStamp]);
+  }, [scanModalOpen, scanResult, scanTimeout, handleScanClose, addStamp, isProcessing, lastScannedCode]);
 
   // サインインしていなければ/loginへリダイレクト
   useEffect(() => {
@@ -767,8 +831,10 @@ export default function Home() {
           try {
             await addAutoStamp(toAddress, autoStampSettings.selectedCardId);
             console.log('🎯 自動スタンプが押されました');
+            setSendSuccess(`送金が完了しました！ブロック番号: ${result.Ok.toString()}\n✅ スタンプも自動で押されました！`);
           } catch (stampError) {
             console.warn('自動スタンプエラー:', stampError);
+            setSendSuccess(`送金が完了しました！ブロック番号: ${result.Ok.toString()}\n⚠️ スタンプの追加に失敗しましたが、送金は成功しました`);
             // スタンプエラーは支払い成功には影響しない
           }
         }
@@ -1169,6 +1235,13 @@ export default function Home() {
           </div>
         </div>
       )}
+      {/* お祝いアニメーション */}
+      <CelebrationAnimation
+        isVisible={celebration.isVisible}
+        shopName={celebration.shopName}
+        reward={celebration.reward}
+        onClose={() => setCelebration({ ...celebration, isVisible: false })}
+      />
     </main>
   );
 }

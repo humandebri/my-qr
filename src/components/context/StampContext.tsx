@@ -15,7 +15,7 @@ interface StampContextType {
   createStampCard: (card: Omit<StampCard, 'id' | 'createdAt' | 'shopOwner'>) => Promise<void>;
   deleteStampCard: (cardId: string) => Promise<void>;
   getUserStamp: (cardId: string) => UserStamp | undefined;
-  addStamp: (cardId: string) => Promise<void>;
+  addStamp: (cardId: string) => Promise<{ isComplete: boolean; shopName: string; reward: string }>;
   addAutoStamp: (recipientPrincipal: string, selectedCardId?: string) => Promise<void>;
   claimReward: (cardId: string) => Promise<void>;
   refreshStamps: () => Promise<void>;
@@ -35,19 +35,21 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const { user } = useAuth();
   const [stampCards, setStampCards] = useState<StampCard[]>([]);
   const [userStamps, setUserStamps] = useState<UserStamp[]>([]);
+  const [userStampVersions, setUserStampVersions] = useState<Map<string, bigint>>(new Map());
   const [stampHistory, setStampHistory] = useState<StampHistory[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchStampCards = useCallback(async () => {
+  const fetchStampCards = useCallback(async (): Promise<void> => {
     try {
       const { items } = await listDocs({
         collection: 'stampCards',
       });
       setStampCards(items.map(item => item.data as StampCard));
-    } catch (err) {
+      setError(null); // 成功時はエラーをクリア
+    } catch (err: unknown) {
       console.error('Error fetching stamp cards:', err);
-      setError('Failed to fetch stamp cards');
+      setError('スタンプカードの取得に失敗しました');
     }
   }, []);
 
@@ -63,7 +65,13 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           },
         },
       });
-      setUserStamps(items.map(item => item.data as UserStamp));
+      const stamps = items.map(item => item.data as UserStamp);
+      const versions = new Map<string, bigint>();
+      items.forEach(item => {
+        versions.set(item.key, item.version || BigInt(0));
+      });
+      setUserStamps(stamps);
+      setUserStampVersions(versions);
     } catch (err) {
       console.error('Error fetching user stamps:', err);
       setError('Failed to fetch user stamps');
@@ -111,6 +119,7 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       id: nanoid(),
       createdAt: Date.now(),
       shopOwner: user.key,
+      expirationDays: card.expirationDays,
     };
 
     await setDoc({
@@ -132,12 +141,20 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (!card) throw new Error('Stamp card not found');
     if (card.shopOwner !== user.key) throw new Error('Not authorized to delete this card');
 
+    // 全ドキュメントを取得して該当するものを探す
+    const { items } = await listDocs({
+      collection: 'stampCards',
+    });
+
+    const docToDelete = items.find(item => item.key === cardId);
+    
+    if (!docToDelete) {
+      throw new Error('Document not found for deletion');
+    }
+
     await deleteDoc({
       collection: 'stampCards',
-      doc: {
-        key: cardId,
-        data: card,
-      },
+      doc: docToDelete,
     });
 
     await refreshStamps();
@@ -147,7 +164,7 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return userStamps.find(stamp => stamp.cardId === cardId);
   };
 
-  const addStamp = async (cardId: string) => {
+  const addStamp = async (cardId: string): Promise<{ isComplete: boolean; shopName: string; reward: string }> => {
     if (!user) throw new Error('User must be authenticated');
 
     const existingStamp = getUserStamp(cardId);
@@ -164,26 +181,38 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         stampCount: existingStamp.stampCount + 1,
         lastStampedAt: Date.now(),
         updatedAt: Date.now(),
+        firstStampedAt: existingStamp.firstStampedAt || existingStamp.createdAt,
       };
 
+      const updateDoc = {
+        key: existingStamp.id,
+        data: updatedStamp,
+        description: `userId:${user.key}`,
+        version: undefined as bigint | undefined,
+      };
+      
+      // バージョンがある場合のみ追加
+      const version = userStampVersions.get(existingStamp.id);
+      if (version !== undefined) {
+        updateDoc.version = version;
+      }
+      
       await setDoc({
         collection: 'userStamps',
-        doc: {
-          key: existingStamp.id,
-          data: updatedStamp,
-          description: `userId:${user.key}`,
-        },
+        doc: updateDoc,
       });
     } else {
+      const now = Date.now();
       const newUserStamp: UserStamp = {
         id: nanoid(),
         userId: user.key,
         cardId,
         stampCount: 1,
-        lastStampedAt: Date.now(),
+        lastStampedAt: now,
         completedCount: 0,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
+        createdAt: now,
+        updatedAt: now,
+        firstStampedAt: now,
       };
 
       await setDoc({
@@ -217,6 +246,17 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
 
     await refreshStamps();
+
+    // 条件達成をチェック
+    const finalStamp = existingStamp 
+      ? { ...existingStamp, stampCount: existingStamp.stampCount + 1 }
+      : { stampCount: 1 };
+    
+    return {
+      isComplete: finalStamp.stampCount >= card.requiredStamps,
+      shopName: card.shopName,
+      reward: card.reward,
+    };
   };
 
   const addAutoStamp = async (recipientPrincipal: string, selectedCardId?: string) => {
@@ -245,10 +285,20 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       throw new Error('MULTIPLE_CARDS_REQUIRE_SELECTION');
     }
 
-    // 支払いを受けたユーザーのスタンプを追加
-    const existingStamp = userStamps.find(stamp => 
-      stamp.cardId === targetCard.id && stamp.userId === recipientPrincipal
+    // 支払いを受けたユーザーのスタンプを取得
+    const { items: recipientStamps } = await listDocs({
+      collection: 'userStamps',
+      filter: {
+        matcher: {
+          description: `userId:${recipientPrincipal}`,
+        },
+      },
+    });
+    
+    const existingStampDoc = recipientStamps.find(item => 
+      (item.data as UserStamp).cardId === targetCard.id
     );
+    const existingStamp = existingStampDoc ? existingStampDoc.data as UserStamp : null;
 
     if (existingStamp) {
       if (existingStamp.stampCount >= targetCard.requiredStamps) {
@@ -260,26 +310,37 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         stampCount: existingStamp.stampCount + 1,
         lastStampedAt: Date.now(),
         updatedAt: Date.now(),
+        firstStampedAt: existingStamp.firstStampedAt || existingStamp.createdAt,
       };
 
+      const updateDoc = {
+        key: existingStamp.id,
+        data: updatedStamp,
+        description: `userId:${recipientPrincipal}`,
+        version: undefined as bigint | undefined,
+      };
+      
+      // バージョンがある場合のみ追加（recipientStampsから取得）
+      if (existingStampDoc && existingStampDoc.version !== undefined) {
+        updateDoc.version = existingStampDoc.version;
+      }
+      
       await setDoc({
         collection: 'userStamps',
-        doc: {
-          key: existingStamp.id,
-          data: updatedStamp,
-          description: `userId:${recipientPrincipal}`,
-        },
+        doc: updateDoc,
       });
     } else {
+      const now = Date.now();
       const newStamp: UserStamp = {
         id: nanoid(),
         userId: recipientPrincipal,
         cardId: targetCard.id,
         stampCount: 1,
         completedCount: 0,
-        createdAt: Date.now(),
-        lastStampedAt: Date.now(),
-        updatedAt: Date.now(),
+        createdAt: now,
+        lastStampedAt: now,
+        updatedAt: now,
+        firstStampedAt: now,
       };
 
       await setDoc({
@@ -333,15 +394,25 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       stampCount: 0,
       completedCount: userStamp.completedCount + 1,
       updatedAt: Date.now(),
+      firstStampedAt: undefined, // 次回スタンプ開始時にリセット
     };
 
+    const updateDoc = {
+      key: userStamp.id,
+      data: updatedStamp,
+      description: `userId:${user.key}`,
+      version: undefined as bigint | undefined,
+    };
+    
+    // バージョンがある場合のみ追加
+    const version = userStampVersions.get(userStamp.id);
+    if (version !== undefined) {
+      updateDoc.version = version;
+    }
+    
     await setDoc({
       collection: 'userStamps',
-      doc: {
-        key: userStamp.id,
-        data: updatedStamp,
-        description: `userId:${user.key}`,
-      },
+      doc: updateDoc,
     });
 
     const historyEntry: StampHistory = {
