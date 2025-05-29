@@ -150,13 +150,35 @@ export const StampCard: React.FC<StampCardProps> = ({
       )}
 
       {(card.expirationDays || card.expiresAt) && (
-        <div className="text-xs text-gray-500 mt-2">
+        <div className="mt-2">
           {card.expirationDays && userStamp?.firstStampedAt ? (
-            <p>有効期限: {new Date(userStamp.firstStampedAt + card.expirationDays * 24 * 60 * 60 * 1000).toLocaleDateString('ja-JP')}</p>
+            (() => {
+              const expirationDate = new Date(userStamp.firstStampedAt + card.expirationDays * 24 * 60 * 60 * 1000);
+              const now = new Date();
+              const daysLeft = Math.ceil((expirationDate.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+              const isExpired = daysLeft < 0;
+              const isNearExpiry = daysLeft >= 0 && daysLeft <= 7;
+              
+              return (
+                <div className={`text-xs p-2 rounded ${
+                  isExpired ? 'bg-red-100 text-red-700 font-semibold' : 
+                  isNearExpiry ? 'bg-yellow-100 text-yellow-700' : 
+                  'text-gray-500'
+                }`}>
+                  {isExpired ? (
+                    <p>⚠️ 有効期限切れ - 次回スタンプ時にリセットされます</p>
+                  ) : isNearExpiry ? (
+                    <p>⏰ 有効期限まであと{daysLeft}日 ({expirationDate.toLocaleDateString('ja-JP')})</p>
+                  ) : (
+                    <p>有効期限: {expirationDate.toLocaleDateString('ja-JP')}</p>
+                  )}
+                </div>
+              );
+            })()
           ) : card.expirationDays ? (
-            <p>有効期限: 最初のスタンプから{card.expirationDays}日間</p>
+            <p className="text-xs text-gray-500">有効期限: 最初のスタンプから{card.expirationDays}日間</p>
           ) : card.expiresAt ? (
-            <p>有効期限: {new Date(card.expiresAt).toLocaleDateString('ja-JP')}</p>
+            <p className="text-xs text-gray-500">有効期限: {new Date(card.expiresAt).toLocaleDateString('ja-JP')}</p>
           ) : null}
         </div>
       )}

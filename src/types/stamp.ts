@@ -35,6 +35,7 @@ export interface StampHistory {
     rewardClaimed?: boolean;
     autoStamp?: boolean;
     paymentReceiver?: string;
+    expired?: boolean; // 期限切れでリセットされた場合
   };
 }
 

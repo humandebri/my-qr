@@ -216,6 +216,85 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const pointsToAdd = card.pointsPerStamp || 10;
 
     if (existingStamp) {
+      // 期限切れチェック
+      if (card.expirationDays && existingStamp.firstStampedAt) {
+        const expirationDate = existingStamp.firstStampedAt + (card.expirationDays * 24 * 60 * 60 * 1000);
+        if (Date.now() > expirationDate) {
+          // 期限切れの場合、スタンプをリセット
+          const resetStamp: UserStamp = {
+            ...existingStamp,
+            stampCount: 1, // 1からやり直し
+            lastStampedAt: Date.now(),
+            updatedAt: Date.now(),
+            firstStampedAt: Date.now(), // 新しい開始日時
+            totalPointsEarned: (existingStamp.totalPointsEarned || 0) + pointsToAdd,
+          };
+
+          const updateDoc = {
+            key: existingStamp.id,
+            data: resetStamp,
+            description: `userId:${user.key}`,
+            version: undefined as bigint | undefined,
+          };
+          
+          const version = userStampVersions.get(existingStamp.id);
+          if (version !== undefined) {
+            updateDoc.version = version;
+          }
+          
+          await setDoc({
+            collection: 'userStamps',
+            doc: updateDoc,
+          });
+
+          // 履歴に期限切れリセットを記録
+          const resetHistoryEntry: StampHistory = {
+            id: nanoid(),
+            userId: user.key,
+            cardId,
+            action: 'stamp',
+            timestamp: Date.now(),
+            metadata: {
+              stampNumber: 1,
+              autoStamp: false,
+              expired: true, // 期限切れでリセットされたことを記録
+            },
+          };
+
+          await setDoc({
+            collection: 'stampHistory',
+            doc: {
+              key: resetHistoryEntry.id,
+              data: resetHistoryEntry,
+              description: `userId:${user.key}`,
+            },
+          });
+
+          // ポイントも更新
+          if (userPoints) {
+            const updatedPoints: UserPoints = {
+              ...userPoints,
+              totalPoints: userPoints.totalPoints + pointsToAdd,
+              lastUpdated: Date.now(),
+            };
+            
+            await setDoc({
+              collection: 'userPoints',
+              doc: {
+                key: userPoints.id,
+                data: updatedPoints,
+                description: `userId:${user.key}`,
+              },
+            });
+          }
+
+          await refreshStamps();
+
+          // 期限切れメッセージとともに結果を返す
+          throw new Error(`スタンプカードの有効期限が切れていたため、リセットされました。新たに1個目のスタンプが押されました。`);
+        }
+      }
+
       if (existingStamp.stampCount >= card.requiredStamps) {
         throw new Error('Stamp card is already full');
       }
@@ -368,6 +447,65 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const existingStamp = existingStampDoc ? existingStampDoc.data as UserStamp : null;
 
     if (existingStamp) {
+      // 期限切れチェック
+      if (targetCard.expirationDays && existingStamp.firstStampedAt) {
+        const expirationDate = existingStamp.firstStampedAt + (targetCard.expirationDays * 24 * 60 * 60 * 1000);
+        if (Date.now() > expirationDate) {
+          // 期限切れの場合、スタンプをリセット
+          const resetStamp: UserStamp = {
+            ...existingStamp,
+            stampCount: 1, // 1からやり直し
+            lastStampedAt: Date.now(),
+            updatedAt: Date.now(),
+            firstStampedAt: Date.now(), // 新しい開始日時
+            totalPointsEarned: (existingStamp.totalPointsEarned || 0) + pointsToAdd,
+          };
+
+          const updateDoc = {
+            key: existingStamp.id,
+            data: resetStamp,
+            description: `userId:${recipientPrincipal}`,
+            version: undefined as bigint | undefined,
+          };
+          
+          if (existingStampDoc && existingStampDoc.version !== undefined) {
+            updateDoc.version = existingStampDoc.version;
+          }
+          
+          await setDoc({
+            collection: 'userStamps',
+            doc: updateDoc,
+          });
+
+          // 履歴に期限切れリセットを記録
+          const resetHistoryEntry: StampHistory = {
+            id: nanoid(),
+            userId: recipientPrincipal,
+            cardId: targetCard.id,
+            action: 'stamp',
+            timestamp: Date.now(),
+            metadata: {
+              stampNumber: 1,
+              autoStamp: true,
+              paymentReceiver: user.key,
+              expired: true, // 期限切れでリセットされたことを記録
+            },
+          };
+
+          await setDoc({
+            collection: 'stampHistory',
+            doc: {
+              key: resetHistoryEntry.id,
+              data: resetHistoryEntry,
+              description: `userId:${recipientPrincipal}`,
+            },
+          });
+
+          await refreshStamps();
+          throw new Error(`スタンプカードの有効期限が切れていたため、リセットされました。新たに1個目のスタンプが押されました。`);
+        }
+      }
+
       if (existingStamp.stampCount >= targetCard.requiredStamps) {
         throw new Error('Stamp card is already full');
       }
