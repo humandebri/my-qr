@@ -95,16 +95,6 @@ export const StampCard: React.FC<StampCardProps> = ({
           <p className="text-xs text-gray-500">
             進捗: {stampCount} / {card.requiredStamps}
           </p>
-          {card.pointsPerStamp && (
-            <p className="text-xs text-gray-500">
-              獲得ポイント: {card.pointsPerStamp}ポイント/スタンプ
-            </p>
-          )}
-          {userStamp?.totalPointsEarned !== undefined && userStamp.totalPointsEarned > 0 && (
-            <p className="text-xs text-gray-500">
-              このカードで獲得: {userStamp.totalPointsEarned}ポイント
-            </p>
-          )}
           {completedCount > 0 && (
             <p className="text-xs text-gray-500">
               累計達成回数: {completedCount}回

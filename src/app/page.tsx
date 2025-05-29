@@ -91,6 +91,8 @@ export default function Home() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [lastScannedCode, setLastScannedCode] = useState<string | null>(null);
   const lastScannedTimeRef = useRef<number>(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadedImage, setUploadedImage] = useState<string | null>(null);
   
   // トランザクションフィルタ用のstate
   const [txFilter, setTxFilter] = useState<'all' | 'sent' | 'received'>('all');
@@ -408,6 +410,12 @@ export default function Home() {
       console.warn('カメラストリーム停止エラー:', e);
     }
     
+    // アップロード画像をクリア
+    setUploadedImage(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+    
     console.log('✅ handleScanClose完了');
   }, [scanTimeout]);
 
@@ -447,6 +455,65 @@ export default function Home() {
       alert('カメラにアクセスできませんでした。ブラウザの設定を確認してください。');
     }
   }, []);
+
+  // QRコード処理を共通化
+  const processQRCode = useCallback(async (scannedData: string) => {
+    console.log('📋 スキャン結果:', scannedData);
+    
+    // スタンプQRコードかどうかをチェック
+    if (scannedData.startsWith('stamp://')) {
+      // スタンプQRコードの処理
+      const stampId = scannedData.replace('stamp://', '');
+      console.log('🎯 スタンプID検出:', stampId);
+      
+      try {
+        const result = await addStamp(stampId);
+        
+        if (result.isComplete) {
+          // 条件達成！お祝いアニメーションを表示
+          setCelebration({
+            isVisible: true,
+            shopName: result.shopName,
+            reward: result.reward,
+          });
+        } else {
+          // 通常のスタンプ追加
+          alert('スタンプを追加しました！');
+        }
+      } catch (err) {
+        console.error('スタンプ追加エラー:', err);
+        alert(err instanceof Error ? err.message : 'スタンプの追加に失敗しました');
+      }
+      
+      // スキャンモーダルを閉じる
+      handleScanClose();
+      return;
+    }
+    
+    // 従来のプリンシパルアドレス処理
+    let address = scannedData;
+    
+    // icp://principal/ プレフィックスを削除
+    if (address.startsWith('icp://principal/')) {
+      address = address.replace('icp://principal/', '');
+      console.log('🔧 プレフィックス削除後:', address);
+    }
+    
+    // 送金先アドレスに設定
+    console.log('💰 送金先アドレス設定中:', address);
+    setToAddress(address);
+    
+    // スキャンモーダルを閉じる
+    console.log('🚪 スキャンモーダルを閉じています...');
+    handleScanClose();
+    
+    // 送金モーダルを開く（少し遅延して確実に）
+    console.log('💸 送金モーダルを開いています...');
+    setTimeout(() => {
+      setSendModalOpen(true);
+      console.log('✅ 送金モーダル表示完了');
+    }, 100);
+  }, [addStamp, handleScanClose, setToAddress, setSendModalOpen, setCelebration]);
 
   const startQRScanning = useCallback(async () => {
     if (!videoRef.current) {
@@ -511,63 +578,7 @@ export default function Home() {
           console.log('⏰ タイムアウトクリア完了');
         }
         
-        console.log('📋 スキャン結果:', scannedData);
-        
-        // スタンプQRコードかどうかをチェック
-        if (scannedData.startsWith('stamp://')) {
-          // スタンプQRコードの処理
-          const stampId = scannedData.replace('stamp://', '');
-          console.log('🎯 スタンプID検出:', stampId);
-          
-          try {
-            const result = await addStamp(stampId);
-            
-            if (result.isComplete) {
-              // 条件達成！お祝いアニメーションを表示
-              setCelebration({
-                isVisible: true,
-                shopName: result.shopName,
-                reward: result.reward,
-              });
-            } else {
-              // 通常のスタンプ追加
-              alert('スタンプを追加しました！');
-            }
-          } catch (err) {
-            console.error('スタンプ追加エラー:', err);
-            alert(err instanceof Error ? err.message : 'スタンプの追加に失敗しました');
-          }
-          
-          // スキャンモーダルを閉じる
-          handleScanClose();
-          return; // 送金処理をスキップ
-        }
-        
-        // 従来のプリンシパルアドレス処理
-        let address = scannedData;
-        
-        // icp://principal/ プレフィックスを削除
-        if (address.startsWith('icp://principal/')) {
-          address = address.replace('icp://principal/', '');
-          console.log('🔧 プレフィックス削除後:', address);
-        }
-        
-        // 送金先アドレスに設定
-        console.log('💰 送金先アドレス設定中:', address);
-        setToAddress(address);
-        
-        // スキャンモーダルを閉じる
-        console.log('🚪 スキャンモーダルを閉じています...');
-        handleScanClose();
-        
-        // 送金モーダルを開く（少し遅延して確実に）
-        console.log('💸 送金モーダルを開いています...');
-        setTimeout(() => {
-          setSendModalOpen(true);
-          console.log('✅ 送金モーダル表示完了');
-        }, 100);
-        
-        console.log('✅ onDecode処理完了');
+        await processQRCode(scannedData);
       };
       
       // QrScanner初期化（videoが完全に準備できた後）
@@ -649,7 +660,7 @@ export default function Home() {
       
       alert(`${userFriendlyMessage}\n\n技術的詳細: ${errorMessage}`);
     }
-  }, [scanModalOpen, scanResult, scanTimeout, handleScanClose, addStamp, isProcessing, lastScannedCode]);
+  }, [scanModalOpen, scanResult, scanTimeout, handleScanClose, addStamp, isProcessing, lastScannedCode, processQRCode]);
 
   // サインインしていなければ/loginへリダイレクト
   useEffect(() => {
@@ -713,17 +724,17 @@ export default function Home() {
 
   // スキャンモーダルが開いたときにカメラを開始
   useEffect(() => {
-    if (scanModalOpen) {
+    if (scanModalOpen && !uploadedImage) {
       startCamera().then(() => {
         // カメラ起動後にQRスキャンを開始
         setTimeout(() => {
-          if (scanModalOpen && videoRef.current) {
+          if (scanModalOpen && videoRef.current && !uploadedImage) {
             startQRScanning();
           }
         }, 100);
       });
     }
-  }, [scanModalOpen, startCamera, startQRScanning]);
+  }, [scanModalOpen, startCamera, startQRScanning, uploadedImage]);
 
   // ✅ タブ復帰時の再スキャン強制開始
   useEffect(() => {
@@ -873,6 +884,63 @@ export default function Home() {
 
   const handleScan = () => {
     setScanModalOpen(true);
+  };
+
+  // 画像ファイル選択ハンドラー
+  const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    // 画像ファイルかチェック
+    if (!file.type.startsWith('image/')) {
+      alert('画像ファイルを選択してください');
+      return;
+    }
+
+    try {
+      // 画像をData URLとして読み込み
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const imageDataUrl = e.target?.result as string;
+        setUploadedImage(imageDataUrl);
+
+        // カメラを停止
+        if (videoRef.current?.srcObject) {
+          const stream = videoRef.current.srcObject as MediaStream;
+          stream.getTracks().forEach(track => track.stop());
+          videoRef.current.srcObject = null;
+        }
+        if (scannerRef.current) {
+          try {
+            (scannerRef.current as { stop: () => void }).stop();
+          } catch (e) {
+            console.warn('Scanner stop error:', e);
+          }
+          scannerRef.current = null;
+        }
+
+        // QRスキャナーで画像をスキャン
+        try {
+          const QrScanner = (await import('qr-scanner')).default;
+          const result = await QrScanner.scanImage(imageDataUrl, {
+            returnDetailedScanResult: true,
+          });
+          
+          console.log('🎉 画像からQRコード検出成功:', result.data);
+          setScanResult(result.data);
+          
+          // スキャン結果を処理
+          await processQRCode(result.data);
+        } catch (err) {
+          console.error('画像スキャンエラー:', err);
+          alert('QRコードが検出できませんでした。\n画像が鮮明であることを確認してください。');
+        }
+      };
+      reader.readAsDataURL(file);
+    } catch (err) {
+      console.error('画像読み込みエラー:', err);
+      alert('画像の読み込みに失敗しました');
+    }
   };
 
   const handleDownloadQR = () => {
@@ -1206,30 +1274,91 @@ export default function Home() {
               </button>
             </div>
             
-            <div className="relative bg-black rounded overflow-hidden">
-              <video
-                ref={videoRef}
-                className="w-full h-64 object-cover"
-                playsInline
-                muted
-                autoPlay
-              />
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div className="w-48 h-48 border-4 border-blue-400 rounded-lg animate-pulse"></div>
+            {uploadedImage ? (
+              <div className="relative bg-gray-100 rounded overflow-hidden">
+                <Image
+                  src={uploadedImage}
+                  alt="Uploaded for QR scan"
+                  className="w-full h-64 object-contain"
+                  width={400}
+                  height={256}
+                  style={{ objectFit: 'contain' }}
+                />
+                <div className="absolute top-2 right-2">
+                  <button
+                    onClick={() => {
+                      setUploadedImage(null);
+                      if (fileInputRef.current) {
+                        fileInputRef.current.value = '';
+                      }
+                      // カメラを再開
+                      if (scanModalOpen) {
+                        startCamera().then(() => {
+                          setTimeout(() => {
+                            if (scanModalOpen && videoRef.current) {
+                              startQRScanning();
+                            }
+                          }, 100);
+                        });
+                      }
+                    }}
+                    className="bg-black bg-opacity-50 text-white p-2 rounded hover:bg-opacity-70"
+                  >
+                    ✕
+                  </button>
+                </div>
               </div>
-
-            </div>
+            ) : (
+              <div className="relative bg-black rounded overflow-hidden">
+                <video
+                  ref={videoRef}
+                  className="w-full h-64 object-cover"
+                  playsInline
+                  muted
+                  autoPlay
+                />
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <div className="w-48 h-48 border-4 border-blue-400 rounded-lg animate-pulse"></div>
+                </div>
+              </div>
+            )}
             
-            <div className="mt-4 space-y-2">
-              <p className="text-center text-sm text-gray-600">
-                QRコードを青い枠内に合わせてください
-              </p>
-              <p className="text-center text-xs text-gray-500">
-                📱 カメラが暗い場合は照明を当ててください
-              </p>
-              <p className="text-center text-xs text-gray-500">
-                🔄 動作しない場合はページを再読み込みしてください
-              </p>
+            <div className="mt-4 space-y-3">
+              <div className="flex gap-2">
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex-1 px-4 py-2 bg-lavender-blue-500 text-white rounded-lg hover:bg-lavender-blue-600 transition-colors flex items-center justify-center gap-2"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                  画像から読み取る
+                </button>
+              </div>
+              
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handleImageUpload}
+                className="hidden"
+              />
+              
+              <div className="space-y-2">
+                <p className="text-center text-sm text-gray-600">
+                  {uploadedImage ? '画像内のQRコードを検出中...' : 'QRコードを青い枠内に合わせてください'}
+                </p>
+                {!uploadedImage && (
+                  <>
+                    <p className="text-center text-xs text-gray-500">
+                      📱 カメラが暗い場合は照明を当ててください
+                    </p>
+                    <p className="text-center text-xs text-gray-500">
+                      🔄 動作しない場合はページを再読み込みしてください
+                    </p>
+                  </>
+                )}
+              </div>
             </div>
 
           </div>

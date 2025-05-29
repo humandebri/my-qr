@@ -3,20 +3,19 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { listDocs, setDoc, deleteDoc } from '@junobuild/core';
 import { useAuth } from '@/app/client-providers';
-import { StampCard, UserStamp, StampHistory, UserPoints } from '@/types/stamp';
+import { StampCard, UserStamp, StampHistory } from '@/types/stamp';
 import { nanoid } from 'nanoid';
 
 interface StampContextType {
   stampCards: StampCard[];
   userStamps: UserStamp[];
   stampHistory: StampHistory[];
-  userPoints: UserPoints | null;
   loading: boolean;
   error: string | null;
   createStampCard: (card: Omit<StampCard, 'id' | 'createdAt' | 'shopOwner'>) => Promise<void>;
   deleteStampCard: (cardId: string) => Promise<void>;
   getUserStamp: (cardId: string) => UserStamp | undefined;
-  addStamp: (cardId: string) => Promise<{ isComplete: boolean; shopName: string; reward: string; pointsEarned: number }>;
+  addStamp: (cardId: string) => Promise<{ isComplete: boolean; shopName: string; reward: string }>;
   addAutoStamp: (recipientPrincipal: string, selectedCardId?: string) => Promise<void>;
   claimReward: (cardId: string) => Promise<void>;
   refreshStamps: () => Promise<void>;
@@ -38,7 +37,6 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [userStamps, setUserStamps] = useState<UserStamp[]>([]);
   const [userStampVersions, setUserStampVersions] = useState<Map<string, bigint>>(new Map());
   const [stampHistory, setStampHistory] = useState<StampHistory[]>([]);
-  const [userPoints, setUserPoints] = useState<UserPoints | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -98,43 +96,6 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, [user]);
 
-  const fetchUserPoints = useCallback(async () => {
-    if (!user) return;
-    
-    try {
-      const { items } = await listDocs({
-        collection: 'userPoints',
-        filter: {
-          matcher: {
-            description: `userId:${user.key}`,
-          },
-        },
-      });
-      
-      if (items.length > 0) {
-        setUserPoints(items[0].data as UserPoints);
-      } else {
-        // 初回の場合は0ポイントで初期化
-        const initialPoints: UserPoints = {
-          id: nanoid(),
-          userId: user.key,
-          totalPoints: 0,
-          lastUpdated: Date.now(),
-        };
-        await setDoc({
-          collection: 'userPoints',
-          doc: {
-            key: initialPoints.id,
-            data: initialPoints,
-            description: `userId:${user.key}`,
-          },
-        });
-        setUserPoints(initialPoints);
-      }
-    } catch (err) {
-      console.error('Error fetching user points:', err);
-    }
-  }, [user]);
 
   const refreshStamps = useCallback(async () => {
     setLoading(true);
@@ -143,10 +104,9 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       fetchStampCards(),
       fetchUserStamps(),
       fetchStampHistory(),
-      fetchUserPoints(),
     ]);
     setLoading(false);
-  }, [fetchStampCards, fetchUserStamps, fetchStampHistory, fetchUserPoints]);
+  }, [fetchStampCards, fetchUserStamps, fetchStampHistory]);
 
   useEffect(() => {
     refreshStamps();
@@ -161,7 +121,6 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       createdAt: Date.now(),
       shopOwner: user.key,
       expirationDays: card.expirationDays,
-      pointsPerStamp: card.pointsPerStamp || 10, // デフォルト10ポイント
     };
 
     await setDoc({
@@ -206,14 +165,12 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return userStamps.find(stamp => stamp.cardId === cardId);
   };
 
-  const addStamp = async (cardId: string): Promise<{ isComplete: boolean; shopName: string; reward: string; pointsEarned: number }> => {
+  const addStamp = async (cardId: string): Promise<{ isComplete: boolean; shopName: string; reward: string }> => {
     if (!user) throw new Error('User must be authenticated');
 
     const existingStamp = getUserStamp(cardId);
     const card = stampCards.find(c => c.id === cardId);
     if (!card) throw new Error('Stamp card not found');
-
-    const pointsToAdd = card.pointsPerStamp || 10;
 
     if (existingStamp) {
       // 期限切れチェック
@@ -227,7 +184,6 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             lastStampedAt: Date.now(),
             updatedAt: Date.now(),
             firstStampedAt: Date.now(), // 新しい開始日時
-            totalPointsEarned: (existingStamp.totalPointsEarned || 0) + pointsToAdd,
           };
 
           const updateDoc = {
@@ -270,24 +226,6 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             },
           });
 
-          // ポイントも更新
-          if (userPoints) {
-            const updatedPoints: UserPoints = {
-              ...userPoints,
-              totalPoints: userPoints.totalPoints + pointsToAdd,
-              lastUpdated: Date.now(),
-            };
-            
-            await setDoc({
-              collection: 'userPoints',
-              doc: {
-                key: userPoints.id,
-                data: updatedPoints,
-                description: `userId:${user.key}`,
-              },
-            });
-          }
-
           await refreshStamps();
 
           // 期限切れメッセージとともに結果を返す
@@ -305,7 +243,6 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         lastStampedAt: Date.now(),
         updatedAt: Date.now(),
         firstStampedAt: existingStamp.firstStampedAt || existingStamp.createdAt,
-        totalPointsEarned: (existingStamp.totalPointsEarned || 0) + pointsToAdd,
       };
 
       const updateDoc = {
@@ -337,7 +274,6 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         createdAt: now,
         updatedAt: now,
         firstStampedAt: now,
-        totalPointsEarned: pointsToAdd,
       };
 
       await setDoc({
@@ -370,24 +306,6 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       },
     });
 
-    // ユーザーの総ポイントを更新
-    if (userPoints) {
-      const updatedPoints: UserPoints = {
-        ...userPoints,
-        totalPoints: userPoints.totalPoints + pointsToAdd,
-        lastUpdated: Date.now(),
-      };
-      
-      await setDoc({
-        collection: 'userPoints',
-        doc: {
-          key: userPoints.id,
-          data: updatedPoints,
-          description: `userId:${user.key}`,
-        },
-      });
-    }
-
     await refreshStamps();
 
     // 条件達成をチェック
@@ -399,7 +317,6 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       isComplete: finalStamp.stampCount >= card.requiredStamps,
       shopName: card.shopName,
       reward: card.reward,
-      pointsEarned: pointsToAdd,
     };
   };
 
@@ -429,7 +346,6 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       throw new Error('MULTIPLE_CARDS_REQUIRE_SELECTION');
     }
 
-    const pointsToAdd = targetCard.pointsPerStamp || 10;
 
     // 支払いを受けたユーザーのスタンプを取得
     const { items: recipientStamps } = await listDocs({
@@ -458,7 +374,6 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             lastStampedAt: Date.now(),
             updatedAt: Date.now(),
             firstStampedAt: Date.now(), // 新しい開始日時
-            totalPointsEarned: (existingStamp.totalPointsEarned || 0) + pointsToAdd,
           };
 
           const updateDoc = {
@@ -516,7 +431,6 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         lastStampedAt: Date.now(),
         updatedAt: Date.now(),
         firstStampedAt: existingStamp.firstStampedAt || existingStamp.createdAt,
-        totalPointsEarned: (existingStamp.totalPointsEarned || 0) + pointsToAdd,
       };
 
       const updateDoc = {
@@ -547,7 +461,6 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         lastStampedAt: now,
         updatedAt: now,
         firstStampedAt: now,
-        totalPointsEarned: pointsToAdd,
       };
 
       await setDoc({
@@ -649,7 +562,6 @@ export const StampProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     stampCards,
     userStamps,
     stampHistory,
-    userPoints,
     loading,
     error,
     createStampCard,
